@@ -1,0 +1,9 @@
+# local assistant notes, not part of the project
+CLAUDE.md
+.claude/
+
+# editor / OS junk
+.vscode/
+*.rbxl.lock
+Thumbs.db
+.DS_Store
