@@ -1149,7 +1149,7 @@ function Library:CreateWindow(opt)
 	box(panel, ud(1, -1, 0, 0), ud(0, 1, 1, 0), Theme.PanelBorder)
 	box(panel, ud(1, -2, 0, 1), ud(0, 1, 1, -2), Theme.PanelShadow)
 	box(panel, ud(0, 1, 1, -2), ud(1, -2, 0, 1), Theme.PanelShadow)
-	local pages = new("Frame", { Parent = panel, BackgroundTransparency = 1, Position = px(1, 1), Size = ud(1, -3, 1, -3), ClipsDescendants = true })
+	local pages = new("Frame", { Parent = panel, BackgroundTransparency = 1, Position = px(1, 1), Size = ud(1, -3, 1, -3) })
 
 	--------------------------------------------------------------------
 	-- compact bar: X and minimize shrink the window into this
@@ -1181,43 +1181,51 @@ function Library:CreateWindow(opt)
 	box(miniGlyph, px(5, 15), px(11, 1), Theme.Glyph)
 
 	--------------------------------------------------------------------
-	-- window state + animations
+	-- window state + animations, XP style: only minimize, restore and maximize animate
 	--
-	-- Callers only change intent (lib.Toggled, minimized); settle() plays whatever transitions
-	-- are needed to reach it, one at a time, so rapid clicks and key presses queue up instead of
-	-- fighting each other. The window animates with a UIScale: a size tween would re-flow the
-	-- whole layout every frame.
+	-- Callers only change intent (lib.Toggled, minimized); settle() plays whatever transition is
+	-- needed to reach it, so a click or key press mid-animation is picked up when it finishes.
 	--------------------------------------------------------------------
-	local winScale = new("UIScale", { Parent = win })
-	local miniScale = new("UIScale", { Parent = mini })
 	local minimized, maximized = false, false
 	local normalPos, normalSize
-	local visual = "none" -- what is on screen right now: "win", "mini" or "none"
+	local visual = "win" -- what is on screen right now: "win", "mini" or "none"
 	local animating, animToken = false, 0
-	local uiReady = false -- tab slides stay off until the first pop-in
 	local settle
 
-	local STYLE = Enum.EasingStyle
-	local OUT, IN = Enum.EasingDirection.Out, Enum.EasingDirection.In
-	local FOLD     = TweenInfo.new(0.20, STYLE.Quint, IN)
-	local UNFOLD   = TweenInfo.new(0.26, STYLE.Back,  OUT)
-	local POP_IN   = TweenInfo.new(0.20, STYLE.Quint, OUT)
-	local POP_OUT  = TweenInfo.new(0.14, STYLE.Quint, IN)
-	local MINI_IN  = TweenInfo.new(0.18, STYLE.Back,  OUT)
-	local MINI_OUT = TweenInfo.new(0.12, STYLE.Quad,  IN)
-	local MAXIMIZE = TweenInfo.new(0.22, STYLE.Quint, OUT)
-	local TAB_SLIDE = TweenInfo.new(0.16, STYLE.Quint, OUT)
-	local FOLD_SCALE, POP_FROM = 0.12, 0.9
+	local MINIMIZE = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local RESTORE  = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local MAXIMIZE = TweenInfo.new(0.20, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	-- Stand-in window for minimize / restore: a title bar over an empty body. It collapses from the
+	-- window's rect to the bar's exact rect (and back), so the swap at either end is seamless. The
+	-- real window can't be resized smoothly, its whole layout would re-flow every frame.
+	local ghost = new("Frame", { Parent = root, Name = "Ghost", BackgroundTransparency = 1, Visible = false, ZIndex = 3 })
+	local ghostBody = new("Frame", {
+		Parent = ghost, Position = px(0, TITLE_H / 2), Size = ud(1, 0, 1, -TITLE_H / 2),
+		BackgroundColor3 = hex(Theme.FrameLeft[2]), ZIndex = 3,
+	})
+	new("Frame", { Parent = ghostBody, Position = px(3, 0), Size = ud(1, -6, 1, -3), BackgroundColor3 = Theme.Face, ZIndex = 3 })
+	local ghostBar = new("Frame", {
+		Parent = ghost, Size = ud(1, 0, 0, TITLE_H), BackgroundColor3 = Theme.White, ZIndex = 4,
+		corner(8), stroke(Theme.FrameEdge), gradient(G.Title),
+	})
+	if opt.Icon then
+		new("ImageLabel", { Parent = ghostBar, Position = px(7, 7), Size = px(16, 16), BackgroundTransparency = 1, Image = opt.Icon, ZIndex = 5 })
+	else
+		logo(ghostBar, 7, 7, 16, 5)
+	end
+	new("TextLabel", {
+		Parent = ghostBar, Position = px(29, 1), Size = ud(1, -36, 1, 0), Text = title, FontFace = FONT_BOLD,
+		TextSize = 14, TextColor3 = Theme.TitleShadow, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 5,
+	})
+	new("TextLabel", {
+		Parent = ghostBar, Position = px(28, 0), Size = ud(1, -36, 1, 0), Text = title, FontFace = FONT_BOLD,
+		TextSize = 14, TextColor3 = Theme.TitleText, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 6,
+	})
 
 	local function relPos(gui)
 		local rel = gui.AbsolutePosition - root.AbsolutePosition
 		return px(math.floor(rel.X + 0.5), math.floor(rel.Y + 0.5))
-	end
-
-	-- the window shrunk about its own center by POP_FROM: position moves so the center stays put
-	local function poppedPos(home)
-		local sz = win.Size
-		return home + px(sz.X.Offset * (1 - POP_FROM) / 2, sz.Y.Offset * (1 - POP_FROM) / 2)
 	end
 
 	-- plays the tweens together, then runs onDone and looks for the next transition to play
@@ -1234,65 +1242,43 @@ function Library:CreateWindow(opt)
 		end)
 	end
 
+	-- window -> bar: the bar takes the window's top-left, and the stand-in shrinks onto it
+	local function collapse()
+		local from, size = relPos(win), win.AbsoluteSize
+		mini.Position = from
+		ghost.Position, ghost.Size = from, px(size.X, size.Y)
+		ghost.Visible = true
+		win.Visible = false
+		animate(MINIMIZE, { { ghost, { Size = px(MINI_W, TITLE_H) } } }, function()
+			ghost.Visible = false
+			mini.Visible = true
+			visual = "mini"
+		end)
+	end
+
+	-- bar -> window: the window comes back wherever the bar was left (unless it's maximized)
+	local function expand()
+		if not maximized then win.Position = relPos(mini) end
+		ghost.Position, ghost.Size = mini.Position, px(MINI_W, TITLE_H)
+		ghost.Visible = true
+		mini.Visible = false
+		animate(RESTORE, { { ghost, { Position = win.Position, Size = win.Size } } }, function()
+			ghost.Visible = false
+			win.Visible = true
+			visual = "win"
+		end)
+	end
+
 	settle = function()
 		if animating or lib.Unloaded then return end
 		local want = lib.Toggled and (minimized and "mini" or "win") or "none"
 		if visual == want then return end
-
-		if visual == "win" then
-			if want == "mini" then
-				-- fold into the bar: it sits at the window's top-left, so collapse toward that corner
-				mini.Position = relPos(win)
-				animate(FOLD, { { winScale, { Scale = FOLD_SCALE } } }, function()
-					win.Visible = false
-					winScale.Scale = 1
-					mini.Visible = true
-					miniScale.Scale = 0.6
-					visual = "mini"
-					animate(MINI_IN, { { miniScale, { Scale = 1 } } }) -- the bar springs out of that corner
-				end)
-			else
-				local home = win.Position
-				animate(POP_OUT, { { winScale, { Scale = POP_FROM } }, { win, { Position = poppedPos(home) } } }, function()
-					win.Visible = false
-					winScale.Scale = 1
-					win.Position = home
-					visual = "none"
-				end)
-			end
-		elseif visual == "mini" then
-			if want == "win" then
-				-- the window grows back out of the bar's corner, wherever the bar was left
-				if not maximized then win.Position = relPos(mini) end
-				mini.Visible = false
-				miniScale.Scale = 1
-				winScale.Scale = FOLD_SCALE
-				win.Visible = true
-				animate(UNFOLD, { { winScale, { Scale = 1 } } }, function() visual = "win" end)
-			else
-				animate(MINI_OUT, { { miniScale, { Scale = 0.7 } } }, function()
-					mini.Visible = false
-					miniScale.Scale = 1
-					visual = "none"
-				end)
-			end
-		else -- visual == "none"
-			if want == "win" then
-				local home = win.Position
-				winScale.Scale = POP_FROM
-				win.Position = poppedPos(home)
-				win.Visible = true
-				animate(POP_IN, { { winScale, { Scale = 1 } }, { win, { Position = home } } }, function()
-					winScale.Scale = 1
-					win.Position = home
-					visual = "win"
-				end)
-			else
-				miniScale.Scale = 0.7
-				mini.Visible = true
-				animate(MINI_IN, { { miniScale, { Scale = 1 } } }, function() visual = "mini" end)
-			end
-		end
+		if visual == "win" and want == "mini" then collapse() return end
+		if visual == "mini" and want == "win" then expand() return end
+		-- showing and hiding are instant, like XP
+		win.Visible = want == "win"
+		mini.Visible = want == "mini"
+		visual = want
 	end
 
 	function W:Minimize()
@@ -1324,9 +1310,11 @@ function Library:CreateWindow(opt)
 		animate(MAXIMIZE, { { win, goal } })
 	end
 
+	-- the toggle key shows the whole window (never the compact bar) or hides everything
 	function lib:Toggle(state)
-		if state == nil then state = not self.Toggled end
+		if state == nil then state = not (self.Toggled and not minimized) end
 		self.Toggled = state
+		minimized = false
 		self:_closePopups()
 		if self._tip then self._tip.Visible = false end
 		settle()
@@ -1337,7 +1325,7 @@ function Library:CreateWindow(opt)
 		W:Minimize()
 		if not warnedClose then
 			warnedClose = true
-			lib:Notify(title, "Still running. Click the bar to open it again, or use Unload to stop it.", 6)
+			lib:Notify(title, "Still running. Click the bar or press " .. keyName(lib.ToggleKey) .. " to open it again. Unload stops it.", 6)
 		end
 	end)
 	connect(minBtn.MouseButton1Click, function() W:Minimize() end)
@@ -1477,13 +1465,7 @@ function Library:CreateWindow(opt)
 
 		local active = false
 		function tab:_setActive(on)
-			local was = active
 			active = on
-			if on and not was and uiReady then
-				-- a short slide in from the right (clipped by the panel)
-				page.Position = px(12, 0)
-				TweenService:Create(page, TAB_SLIDE, { Position = px(0, 0) }):Play()
-			end
 			page.Visible = on
 			slot.ZIndex = on and 2 or 1
 			hl.Visible = on
@@ -1527,13 +1509,6 @@ function Library:CreateWindow(opt)
 		return tab
 	end
 
-	-- the first pop-in waits until the calling script has built its tabs: AddTab can still widen
-	-- the window, and the pop-in measures it
-	win.Visible = false
-	task.defer(function()
-		settle()
-		uiReady = true
-	end)
 	return W
 end
 
@@ -1587,7 +1562,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.8.1"
+local VERSION = "0.8.2"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -2432,6 +2407,9 @@ Places:AddButton({ Text = "Map", Callback = tpMap })
 Places:AddButton({ Text = "Dropped Gun", Callback = tpGun })
 Places:AddDivider()
 Places:AddToggle("safe_spot", { Text = "Safe Spot", Tooltip = "Parks you on a platform 300 studs up. Turn off to go back.", Callback = setSafeSpot })
+Places:AddKeybind("safe_spot_key", { Text = "Safe Spot Key", Default = Enum.KeyCode.Z, Callback = function()
+	Options.safe_spot:Set(not Flags.safe_spot)
+end })
 Places:AddToggle("click_tp", { Text = "Ctrl + Click Teleport" })
 
 local ToPlayer = Teleport:AddGroup("Players", "Right")

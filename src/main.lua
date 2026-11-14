@@ -31,7 +31,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.8.1"
+local VERSION = "0.8.2"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -876,6 +876,9 @@ Places:AddButton({ Text = "Map", Callback = tpMap })
 Places:AddButton({ Text = "Dropped Gun", Callback = tpGun })
 Places:AddDivider()
 Places:AddToggle("safe_spot", { Text = "Safe Spot", Tooltip = "Parks you on a platform 300 studs up. Turn off to go back.", Callback = setSafeSpot })
+Places:AddKeybind("safe_spot_key", { Text = "Safe Spot Key", Default = Enum.KeyCode.Z, Callback = function()
+	Options.safe_spot:Set(not Flags.safe_spot)
+end })
 Places:AddToggle("click_tp", { Text = "Ctrl + Click Teleport" })
 
 local ToPlayer = Teleport:AddGroup("Players", "Right")
