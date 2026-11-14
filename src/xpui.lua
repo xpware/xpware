@@ -1147,7 +1147,7 @@ function Library:CreateWindow(opt)
 	box(panel, ud(1, -1, 0, 0), ud(0, 1, 1, 0), Theme.PanelBorder)
 	box(panel, ud(1, -2, 0, 1), ud(0, 1, 1, -2), Theme.PanelShadow)
 	box(panel, ud(0, 1, 1, -2), ud(1, -2, 0, 1), Theme.PanelShadow)
-	local pages = new("Frame", { Parent = panel, BackgroundTransparency = 1, Position = px(1, 1), Size = ud(1, -3, 1, -3) })
+	local pages = new("Frame", { Parent = panel, BackgroundTransparency = 1, Position = px(1, 1), Size = ud(1, -3, 1, -3), ClipsDescendants = true })
 
 	--------------------------------------------------------------------
 	-- compact bar: X and minimize shrink the window into this
@@ -1179,48 +1179,147 @@ function Library:CreateWindow(opt)
 	box(miniGlyph, px(5, 15), px(11, 1), Theme.Glyph)
 
 	--------------------------------------------------------------------
-	-- window state: compact / maximize / hide
+	-- window state + animations
+	--
+	-- Callers only change intent (lib.Toggled, minimized); settle() plays whatever transitions
+	-- are needed to reach it, one at a time, so rapid clicks and key presses queue up instead of
+	-- fighting each other. The window animates with a UIScale: a size tween would re-flow the
+	-- whole layout every frame.
 	--------------------------------------------------------------------
+	local winScale = new("UIScale", { Parent = win })
+	local miniScale = new("UIScale", { Parent = mini })
 	local minimized, maximized = false, false
 	local normalPos, normalSize
+	local visual = "none" -- what is on screen right now: "win", "mini" or "none"
+	local animating, animToken = false, 0
+	local uiReady = false -- tab slides stay off until the first pop-in
+	local settle
+
+	local STYLE = Enum.EasingStyle
+	local OUT, IN = Enum.EasingDirection.Out, Enum.EasingDirection.In
+	local FOLD     = TweenInfo.new(0.20, STYLE.Quint, IN)
+	local UNFOLD   = TweenInfo.new(0.26, STYLE.Back,  OUT)
+	local POP_IN   = TweenInfo.new(0.20, STYLE.Quint, OUT)
+	local POP_OUT  = TweenInfo.new(0.14, STYLE.Quint, IN)
+	local MINI_IN  = TweenInfo.new(0.18, STYLE.Back,  OUT)
+	local MINI_OUT = TweenInfo.new(0.12, STYLE.Quad,  IN)
+	local MAXIMIZE = TweenInfo.new(0.22, STYLE.Quint, OUT)
+	local TAB_SLIDE = TweenInfo.new(0.16, STYLE.Quint, OUT)
+	local FOLD_SCALE, POP_FROM = 0.12, 0.9
 
 	local function relPos(gui)
 		local rel = gui.AbsolutePosition - root.AbsolutePosition
-		return px(rel.X, rel.Y)
+		return px(math.floor(rel.X + 0.5), math.floor(rel.Y + 0.5))
 	end
 
-	local function refresh()
-		win.Visible = lib.Toggled and not minimized
-		mini.Visible = lib.Toggled and minimized
+	-- the window shrunk about its own center by POP_FROM: position moves so the center stays put
+	local function poppedPos(home)
+		local sz = win.Size
+		return home + px(sz.X.Offset * (1 - POP_FROM) / 2, sz.Y.Offset * (1 - POP_FROM) / 2)
 	end
 
-	-- the bar takes the window's place, and the window comes back wherever the bar was left
+	-- plays the tweens together, then runs onDone and looks for the next transition to play
+	local function animate(info, targets, onDone)
+		animToken += 1
+		local my = animToken
+		animating = true
+		for _, t in ipairs(targets) do TweenService:Create(t[1], info, t[2]):Play() end
+		task.delay(info.Time + 0.03, function()
+			if my ~= animToken or lib.Unloaded then return end
+			animating = false
+			if onDone then onDone() end
+			settle()
+		end)
+	end
+
+	settle = function()
+		if animating or lib.Unloaded then return end
+		local want = lib.Toggled and (minimized and "mini" or "win") or "none"
+		if visual == want then return end
+
+		if visual == "win" then
+			if want == "mini" then
+				-- fold into the bar: it sits at the window's top-left, so collapse toward that corner
+				mini.Position = relPos(win)
+				animate(FOLD, { { winScale, { Scale = FOLD_SCALE } } }, function()
+					win.Visible = false
+					winScale.Scale = 1
+					mini.Visible = true
+					miniScale.Scale = 0.6
+					visual = "mini"
+					animate(MINI_IN, { { miniScale, { Scale = 1 } } }) -- the bar springs out of that corner
+				end)
+			else
+				local home = win.Position
+				animate(POP_OUT, { { winScale, { Scale = POP_FROM } }, { win, { Position = poppedPos(home) } } }, function()
+					win.Visible = false
+					winScale.Scale = 1
+					win.Position = home
+					visual = "none"
+				end)
+			end
+		elseif visual == "mini" then
+			if want == "win" then
+				-- the window grows back out of the bar's corner, wherever the bar was left
+				if not maximized then win.Position = relPos(mini) end
+				mini.Visible = false
+				miniScale.Scale = 1
+				winScale.Scale = FOLD_SCALE
+				win.Visible = true
+				animate(UNFOLD, { { winScale, { Scale = 1 } } }, function() visual = "win" end)
+			else
+				animate(MINI_OUT, { { miniScale, { Scale = 0.7 } } }, function()
+					mini.Visible = false
+					miniScale.Scale = 1
+					visual = "none"
+				end)
+			end
+		else -- visual == "none"
+			if want == "win" then
+				local home = win.Position
+				winScale.Scale = POP_FROM
+				win.Position = poppedPos(home)
+				win.Visible = true
+				animate(POP_IN, { { winScale, { Scale = 1 } }, { win, { Position = home } } }, function()
+					winScale.Scale = 1
+					win.Position = home
+					visual = "win"
+				end)
+			else
+				miniScale.Scale = 0.7
+				mini.Visible = true
+				animate(MINI_IN, { { miniScale, { Scale = 1 } } }, function() visual = "mini" end)
+			end
+		end
+	end
+
 	function W:Minimize()
 		if minimized then return end
 		lib:_closePopups()
 		if lib._tip then lib._tip.Visible = false end
-		mini.Position = relPos(win)
 		minimized = true
-		refresh()
+		settle()
 	end
 	function W:Restore()
 		if not minimized then return end
-		if not maximized then win.Position = relPos(mini) end
 		minimized = false
-		refresh()
+		settle()
 	end
 	function W:ToggleMaximize()
+		if animating or visual ~= "win" then return end
+		local goal
 		if maximized then
-			win.Position, win.Size = normalPos, normalSize
+			goal = { Position = normalPos, Size = normalSize }
 			maximized = false
 		else
 			normalPos, normalSize = win.Position, win.Size
-			win.Position = px(0, 0)
-			win.Size = px(root.AbsoluteSize.X, root.AbsoluteSize.Y)
+			local s = root.AbsoluteSize
+			goal = { Position = px(0, 0), Size = px(s.X, s.Y) }
 			maximized = true
 		end
 		maxIcon.Visible = not maximized
 		restoreIcon.Visible = maximized
+		animate(MAXIMIZE, { { win, goal } })
 	end
 
 	function lib:Toggle(state)
@@ -1228,7 +1327,7 @@ function Library:CreateWindow(opt)
 		self.Toggled = state
 		self:_closePopups()
 		if self._tip then self._tip.Visible = false end
-		refresh()
+		settle()
 	end
 
 	local warnedClose = false
@@ -1253,13 +1352,13 @@ function Library:CreateWindow(opt)
 
 	-- the compact bar: drag it around, or click without dragging to open the window
 	connect(miniHit.InputBegan, function(input)
-		if not isPress(input) then return end
+		if not isPress(input) or animating then return end
 		miniDrag, miniMoved = true, false
 		dragStart, startPos = input.Position, relPos(mini)
 	end)
 
 	connect(titleBar.InputBegan, function(input)
-		if not isPress(input) then return end
+		if not isPress(input) or animating then return end
 		for _, h in ipairs(captionHovers) do
 			if h.hovered then return end
 		end
@@ -1276,7 +1375,7 @@ function Library:CreateWindow(opt)
 		dragStart, startPos = input.Position, px(rel.X, rel.Y)
 	end)
 	connect(grip.InputBegan, function(input)
-		if isPress(input) and not maximized then
+		if isPress(input) and not maximized and not animating then
 			resizing = true
 			dragStart, startSize = input.Position, win.AbsoluteSize
 		end
@@ -1376,7 +1475,13 @@ function Library:CreateWindow(opt)
 
 		local active = false
 		function tab:_setActive(on)
+			local was = active
 			active = on
+			if on and not was and uiReady then
+				-- a short slide in from the right (clipped by the panel)
+				page.Position = px(12, 0)
+				TweenService:Create(page, TAB_SLIDE, { Position = px(0, 0) }):Play()
+			end
 			page.Visible = on
 			slot.ZIndex = on and 2 or 1
 			hl.Visible = on
@@ -1420,7 +1525,13 @@ function Library:CreateWindow(opt)
 		return tab
 	end
 
-	refresh()
+	-- the first pop-in waits until the calling script has built its tabs: AddTab can still widen
+	-- the window, and the pop-in measures it
+	win.Visible = false
+	task.defer(function()
+		settle()
+		uiReady = true
+	end)
 	return W
 end
 

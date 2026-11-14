@@ -31,7 +31,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.8"
+local VERSION = "0.8.1"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -377,34 +377,44 @@ local function updateGunEsp()
 	end
 end
 
--- coins: box adornments, since Highlight caps out at 31 on screen
-local coinBoxes = {}
+-- coins: a Highlight on each coin's mesh, so the outline follows the coin's own shape.
+-- Roblox draws at most 255 Highlights at once and the players and the gun use some, so when
+-- there are more coins than COIN_ESP_MAX only the nearest ones get an outline.
+local COIN_ESP_MAX = 150
+local coinHls = {}
 local function clearCoinEsp()
-	for coin, box in pairs(coinBoxes) do box:Destroy(); coinBoxes[coin] = nil end
+	for coin, hl in pairs(coinHls) do hl:Destroy(); coinHls[coin] = nil end
 end
 onUnload(clearCoinEsp)
 
 local function updateCoinEsp()
 	if not Flags.coin_esp then clearCoinEsp() return end
-	local live = {}
-	for _, coin in ipairs(liveCoins()) do
-		live[coin] = true
-		if not coinBoxes[coin] then
-			local visual = coin:FindFirstChild("CoinVisual")
-			local target = (visual and visual:IsA("BasePart")) and visual or coin
-			local box = Instance.new("BoxHandleAdornment")
-			box.Adornee = target
-			box.Size = target.Size
-			box.AlwaysOnTop = true
-			box.ZIndex = 5
-			box.Transparency = 0.35
-			box.Color3 = COIN_COLOR
-			box.Parent = espFolder
-			coinBoxes[coin] = box
+	local coins = liveCoins()
+	if #coins > COIN_ESP_MAX then
+		local me = myRoot()
+		if me then
+			table.sort(coins, function(a, b)
+				return (a.Position - me.Position).Magnitude < (b.Position - me.Position).Magnitude
+			end)
+			for i = #coins, COIN_ESP_MAX + 1, -1 do coins[i] = nil end
 		end
 	end
-	for coin, box in pairs(coinBoxes) do
-		if not live[coin] then box:Destroy(); coinBoxes[coin] = nil end
+	local live = {}
+	for _, coin in ipairs(coins) do
+		live[coin] = true
+		local hl = coinHls[coin]
+		if not hl then
+			hl = newHighlight()
+			local visual = coin:FindFirstChild("CoinVisual")
+			hl.Adornee = (visual and visual:IsA("BasePart")) and visual or coin
+			coinHls[coin] = hl
+		end
+		-- same opacity / see-through settings as the player outlines
+		styleHighlight(hl, COIN_COLOR)
+		set(hl, "Enabled", true)
+	end
+	for coin, hl in pairs(coinHls) do
+		if not live[coin] then hl:Destroy(); coinHls[coin] = nil end
 	end
 end
 
