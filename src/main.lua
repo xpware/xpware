@@ -2,7 +2,7 @@
 	xpware - Murder Mystery 2
 	Engine: Roblox client (executor)  |  Language: Luau
 
-	UI only. Every gameplay callback is a stub; features get wired in one at a time.
+	Built tab by tab. Done: ESP. Everything else is still a stub.
 	Where the library comes from:
 	  - bundled by build.ps1: `Library` is defined above this file
 	  - Roblox Studio: ReplicatedStorage.xpware.xpui ModuleScript
@@ -20,12 +20,336 @@ if not Library then
 	end
 end
 
-local Players = game:GetService("Players")
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
+
 local LP = Players.LocalPlayer
+local Flags = Library.Flags
 
 local NAME = "xpware"
-local VERSION = "0.2"
+local VERSION = "0.3"
 local function stub() end
+
+------------------------------------------------------------------------
+-- Lifetime: every connection and cleanup goes through here so Unload is total
+------------------------------------------------------------------------
+local conns, cleanups = {}, {}
+local function on(signal, fn)
+	local c = signal:Connect(fn)
+	table.insert(conns, c)
+	return c
+end
+local function onUnload(fn) table.insert(cleanups, fn) end
+local function running() return not Library.Unloaded end
+
+Library:OnUnload(function()
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	for i = #cleanups, 1, -1 do pcall(cleanups[i]) end
+end)
+
+local function cam() return workspace.CurrentCamera end
+
+-- window first: the ESP folder mounts next to Library.Gui, which only exists after this
+local Window = Library:CreateWindow({
+	Title = NAME .. " - Murder Mystery 2",
+	Size = Vector2.new(620, 460),
+	ToggleKey = Enum.KeyCode.RightShift,
+	Taskbar = true,
+	Status = "Ready",
+})
+
+------------------------------------------------------------------------
+-- Character helpers
+------------------------------------------------------------------------
+local function humOf(p) local c = p and p.Character; return c and c:FindFirstChildOfClass("Humanoid") end
+local function rootOf(p) local c = p and p.Character; return c and c:FindFirstChild("HumanoidRootPart") end
+local function isAlive(p) local h = humOf(p); return h ~= nil and h.Health > 0 and rootOf(p) ~= nil end
+local function myRoot() return rootOf(LP) end
+
+local function partOf(inst)
+	if not inst then return nil end
+	if inst:IsA("BasePart") then return inst end
+	if inst:IsA("Model") then return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true) end
+	return inst:FindFirstChildWhichIsA("BasePart", true)
+end
+
+------------------------------------------------------------------------
+-- MM2 game state (names confirmed from an in-game dump)
+--   map:    workspace.<MapName> with CoinContainer + Spawns
+--   coins:  CoinContainer.Coin_Server (Part) > CoinVisual (MeshPart), TouchInterest while collectable
+--   lobby:  workspace.Lobby
+--   roles:  Remotes.Extras.GetPlayerData -> { [name] = { Role, Dead, Killed, Coins, ... } }
+--   tools:  Knife / Gun in Backpack or Character
+--   gun drop: "GunDrop" (not confirmed yet)
+------------------------------------------------------------------------
+local State = { map = nil, lobbyBox = nil, gun = nil, data = {} }
+
+local ROLE_COLORS = {
+	Murderer = Color3.fromRGB(255, 59, 59),
+	Sheriff  = Color3.fromRGB(59, 139, 255),
+	Hero     = Color3.fromRGB(255, 200, 59),
+	Innocent = Color3.fromRGB(76, 217, 100),
+}
+local GUN_COLOR = Color3.fromRGB(170, 90, 255)
+local COIN_COLOR = Color3.fromRGB(255, 215, 0)
+
+local function findMap()
+	for _, m in ipairs(workspace:GetChildren()) do
+		if m.Name ~= "Lobby" and m:IsA("Model") and m:FindFirstChild("CoinContainer") then return m end
+	end
+end
+
+local function updateLobbyBox()
+	local lobby = workspace:FindFirstChild("Lobby")
+	if lobby and lobby:IsA("Model") then
+		local ok, cf, size = pcall(lobby.GetBoundingBox, lobby)
+		if ok then State.lobbyBox = { cf = cf, half = size / 2 + Vector3.new(10, 60, 10) } return end
+	end
+	State.lobbyBox = nil
+end
+
+local function inLobby(p)
+	local r, box = rootOf(p), State.lobbyBox
+	if not (r and box) then return false end
+	local rel = box.cf:PointToObjectSpace(r.Position)
+	return math.abs(rel.X) <= box.half.X and math.abs(rel.Y) <= box.half.Y and math.abs(rel.Z) <= box.half.Z
+end
+
+local function hasTool(p, name)
+	local c, b = p.Character, p:FindFirstChildOfClass("Backpack")
+	return (c and c:FindFirstChild(name)) or (b and b:FindFirstChild(name)) or nil
+end
+
+local function dataOf(p)
+	local d = State.data[p.Name]
+	return type(d) == "table" and d or nil
+end
+
+-- game data first (knows roles before anyone pulls a weapon), tools as the live override
+local function roleOf(p)
+	if hasTool(p, "Knife") then return "Murderer" end
+	local d = dataOf(p)
+	local r = d and d.Role
+	if hasTool(p, "Gun") then return (r == nil or r == "Sheriff") and "Sheriff" or "Hero" end
+	if r == "Murderer" or r == "Sheriff" or r == "Hero" then return r end
+	return "Innocent"
+end
+
+local function isDead(p)
+	local d = dataOf(p)
+	return d ~= nil and (d.Dead == true or d.Killed == true)
+end
+
+-- alive, on the map, not marked dead by the game, not standing in the lobby
+local function inRound(p)
+	return State.map ~= nil and isAlive(p) and not isDead(p) and not inLobby(p)
+end
+
+local function isCoinLive(c)
+	if not (c and c.Parent and c:IsA("BasePart")) then return false end
+	if not c:FindFirstChildOfClass("TouchTransmitter") then return false end
+	local v = c:FindFirstChild("CoinVisual")
+	return not (v and v:IsA("BasePart") and v.Transparency >= 1)
+end
+
+local function liveCoins()
+	local list = {}
+	local cc = State.map and State.map:FindFirstChild("CoinContainer")
+	if cc then
+		for _, c in ipairs(cc:GetChildren()) do
+			if isCoinLive(c) then table.insert(list, c) end
+		end
+	end
+	return list
+end
+
+------------------------------------------------------------------------
+-- ESP: Highlight outlines + billboard text + Drawing tracers
+------------------------------------------------------------------------
+local espFolder = Instance.new("Folder")
+espFolder.Name = HttpService:GenerateGUID(false)
+if not pcall(function() espFolder.Parent = Library.Gui.Parent end) or not espFolder.Parent then
+	espFolder.Parent = LP:WaitForChild("PlayerGui")
+end
+onUnload(function() espFolder:Destroy() end)
+
+local hasDrawing = typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
+
+local function newBillboard()
+	local bb = Instance.new("BillboardGui")
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.Size = UDim2.fromOffset(220, 32)
+	bb.StudsOffset = Vector3.new(0, 3.2, 0)
+	bb.Enabled = false
+	bb.Parent = espFolder
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Font = Enum.Font.SourceSansBold
+	label.TextSize = 14
+	label.TextStrokeTransparency = 0.35
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Parent = bb
+	return bb, label
+end
+
+local function newHighlight()
+	local hl = Instance.new("Highlight")
+	hl.Enabled = false
+	hl.OutlineTransparency = 0
+	hl.Parent = espFolder
+	return hl
+end
+
+local function styleHighlight(hl, color)
+	hl.OutlineColor = color
+	hl.FillColor = color
+	hl.FillTransparency = 1 - (Flags.esp_fill or 0) / 100
+	hl.DepthMode = Flags.esp_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+end
+
+local espObjs = {}
+
+local function makeEsp(p)
+	local o = { hl = newHighlight() }
+	o.bb, o.label = newBillboard()
+	if hasDrawing then
+		local ok, line = pcall(Drawing.new, "Line")
+		if ok then line.Thickness = 1.5; line.Visible = false; o.line = line end
+	end
+	espObjs[p] = o
+	return o
+end
+
+local function hideEsp(o)
+	o.hl.Enabled = false
+	o.bb.Enabled = false
+	if o.line then o.line.Visible = false end
+end
+
+local function removeEsp(p)
+	local o = espObjs[p]
+	if not o then return end
+	o.hl:Destroy()
+	o.bb:Destroy()
+	if o.line then pcall(function() o.line:Remove() end) end
+	espObjs[p] = nil
+end
+onUnload(function() for p in pairs(espObjs) do removeEsp(p) end end)
+
+local function roleShown(role)
+	if role == "Murderer" then return Flags.esp_murderer end
+	if role == "Sheriff" or role == "Hero" then return Flags.esp_sheriff end
+	return Flags.esp_innocent
+end
+
+local function updatePlayerEsp()
+	local parts = Flags.esp_parts or {}
+	local me = myRoot()
+	local camera = cam()
+	local vp = camera.ViewportSize
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LP then
+			local o = espObjs[p] or makeEsp(p)
+			local c, r, h = p.Character, rootOf(p), humOf(p)
+			local role = roleOf(p)
+			local show = c ~= nil and r ~= nil and h ~= nil and h.Health > 0 and roleShown(role)
+			if show and Flags.esp_round_only and not inRound(p) then show = false end
+			local dist = (show and me) and (r.Position - me.Position).Magnitude or 0
+			if show and dist > (Flags.esp_distance or 1000) then show = false end
+
+			if not show then
+				hideEsp(o)
+			else
+				local color = ROLE_COLORS[role]
+
+				o.hl.Adornee = c
+				styleHighlight(o.hl, color)
+				o.hl.Enabled = parts.Outline == true
+
+				local top, bottom = {}, {}
+				if parts.Name then table.insert(top, p.DisplayName) end
+				if parts.Role then table.insert(top, "[" .. role .. "]") end
+				if parts.Distance then table.insert(bottom, math.floor(dist) .. "m") end
+				if parts.Health then table.insert(bottom, math.floor(h.Health) .. " hp") end
+				local text = table.concat(top, " ")
+				if #bottom > 0 then text = text .. (text ~= "" and "\n" or "") .. table.concat(bottom, "  ") end
+				o.bb.Adornee = c:FindFirstChild("Head") or r
+				o.label.Text = text
+				o.label.TextColor3 = color
+				o.bb.Enabled = text ~= ""
+
+				if o.line then
+					local pos, onScreen = camera:WorldToViewportPoint(r.Position)
+					if parts.Tracer and onScreen then
+						o.line.From = Vector2.new(vp.X / 2, vp.Y - 2)
+						o.line.To = Vector2.new(pos.X, pos.Y)
+						o.line.Color = color
+						o.line.Visible = true
+					else
+						o.line.Visible = false
+					end
+				end
+			end
+		end
+	end
+end
+
+-- dropped gun
+local gunHl = newHighlight()
+local gunBB, gunLabel = newBillboard()
+gunLabel.Text = "GUN"
+gunLabel.TextColor3 = GUN_COLOR
+gunBB.StudsOffset = Vector3.new(0, 2, 0)
+
+local function updateGunEsp()
+	local gun = State.gun
+	if Flags.gun_esp and gun and gun.Parent then
+		gunHl.Adornee = gun
+		styleHighlight(gunHl, GUN_COLOR)
+		gunHl.FillTransparency = 0.4
+		gunHl.Enabled = true
+		gunBB.Adornee = partOf(gun)
+		gunBB.Enabled = true
+	else
+		gunHl.Enabled = false
+		gunBB.Enabled = false
+	end
+end
+
+-- coins: box adornments, since Highlight caps out at 31 on screen
+local coinBoxes = {}
+local function clearCoinEsp()
+	for coin, box in pairs(coinBoxes) do box:Destroy(); coinBoxes[coin] = nil end
+end
+onUnload(clearCoinEsp)
+
+local function updateCoinEsp()
+	if not Flags.coin_esp then clearCoinEsp() return end
+	local live = {}
+	for _, coin in ipairs(liveCoins()) do
+		live[coin] = true
+		if not coinBoxes[coin] then
+			local visual = coin:FindFirstChild("CoinVisual")
+			local target = (visual and visual:IsA("BasePart")) and visual or coin
+			local box = Instance.new("BoxHandleAdornment")
+			box.Adornee = target
+			box.Size = target.Size
+			box.AlwaysOnTop = true
+			box.ZIndex = 5
+			box.Transparency = 0.35
+			box.Color3 = COIN_COLOR
+			box.Parent = espFolder
+			coinBoxes[coin] = box
+		end
+	end
+	for coin, box in pairs(coinBoxes) do
+		if not live[coin] then box:Destroy(); coinBoxes[coin] = nil end
+	end
+end
 
 local function otherNames()
 	local t = {}
@@ -36,35 +360,31 @@ local function otherNames()
 	return t
 end
 
-local Window = Library:CreateWindow({
-	Title = NAME .. " - Murder Mystery 2",
-	Size = Vector2.new(620, 460),
-	ToggleKey = Enum.KeyCode.RightShift,
-	Taskbar = true,
-	Status = "Ready",
-})
-
 ------------------------------------------------------------------------
 -- ESP
 ------------------------------------------------------------------------
 local ESP = Window:AddTab("ESP")
 
 local EspPlayers = ESP:AddGroup("Players", "Left")
-EspPlayers:AddToggle("esp_murderer", { Text = "Murderer", Default = true, Callback = stub })
-EspPlayers:AddToggle("esp_sheriff", { Text = "Sheriff / Hero", Default = true, Callback = stub })
-EspPlayers:AddToggle("esp_innocent", { Text = "Innocents", Callback = stub })
-EspPlayers:AddToggle("esp_round_only", { Text = "Only Players In Round", Default = true, Tooltip = "Hides people standing in the lobby", Callback = stub })
-EspPlayers:AddDropdown("esp_parts", { Text = "Draw", Values = { "Outline", "Name", "Role", "Distance", "Health", "Tracer" }, Multi = true, Default = { "Outline", "Name", "Role" }, Callback = stub })
-EspPlayers:AddSlider("esp_distance", { Text = "Max Distance", Min = 50, Max = 2000, Default = 1000, Suffix = " studs", Callback = stub })
+-- these are all read every frame from Flags, so they don't need callbacks
+EspPlayers:AddToggle("esp_murderer", { Text = "Murderer", Default = true })
+EspPlayers:AddToggle("esp_sheriff", { Text = "Sheriff / Hero", Default = true })
+EspPlayers:AddToggle("esp_innocent", { Text = "Innocents" })
+EspPlayers:AddToggle("esp_round_only", { Text = "Only Players In Round", Default = true, Tooltip = "Hides dead players and anyone in the lobby" })
+EspPlayers:AddDropdown("esp_parts", { Text = "Draw", Values = { "Outline", "Name", "Role", "Distance", "Health", "Tracer" }, Multi = true, Default = { "Outline", "Name", "Role" } })
+EspPlayers:AddSlider("esp_distance", { Text = "Max Distance", Min = 50, Max = 2000, Default = 1000, Suffix = " studs" })
 
 local EspStyle = ESP:AddGroup("Outline Style", "Right")
-EspStyle:AddToggle("esp_walls", { Text = "Show Through Walls", Default = true, Callback = stub })
-EspStyle:AddSlider("esp_fill", { Text = "Fill Opacity", Min = 0, Max = 100, Default = 15, Suffix = "%", Tooltip = "0 = outline only", Callback = stub })
+EspStyle:AddToggle("esp_walls", { Text = "Show Through Walls", Default = true })
+EspStyle:AddSlider("esp_fill", { Text = "Fill Opacity", Min = 0, Max = 100, Default = 15, Suffix = "%", Tooltip = "0 = outline only" })
 EspStyle:AddLabel("Red = murderer, blue = sheriff, gold = hero, green = innocent.", { Color = Library.Theme.TextDim })
+if not hasDrawing then
+	EspStyle:AddLabel("Tracers need the Drawing library, which this environment doesn't have.", { Color = Library.Theme.TextDim })
+end
 
 local EspItems = ESP:AddGroup("Items", "Right")
-EspItems:AddToggle("gun_esp", { Text = "Dropped Gun", Default = true, Callback = stub })
-EspItems:AddToggle("coin_esp", { Text = "Coins", Callback = stub })
+EspItems:AddToggle("gun_esp", { Text = "Dropped Gun", Default = true })
+EspItems:AddToggle("coin_esp", { Text = "Coins", Callback = function(v) if not v then clearCoinEsp() end end })
 
 ------------------------------------------------------------------------
 -- Combat
@@ -133,12 +453,10 @@ local function refreshPlayerLists()
 	tpTarget:SetValues(names)
 	trollTarget:SetValues(names)
 end
-local listConns = {
-	Players.PlayerAdded:Connect(refreshPlayerLists),
-	Players.PlayerRemoving:Connect(function() task.defer(refreshPlayerLists) end),
-}
-Library:OnUnload(function()
-	for _, c in ipairs(listConns) do c:Disconnect() end
+on(Players.PlayerAdded, refreshPlayerLists)
+on(Players.PlayerRemoving, function(p)
+	removeEsp(p)
+	task.defer(refreshPlayerLists)
 end)
 
 ------------------------------------------------------------------------
@@ -271,5 +589,75 @@ About:AddLabel("The X button only minimizes. Use Turn Off in the Start menu to u
 
 -- labels the role/farm features will drive later
 local _ = { murdererLabel, sheriffLabel, myRoleLabel, coinLabel }
+
+------------------------------------------------------------------------
+-- Runtime
+------------------------------------------------------------------------
+
+-- player data (Role / Dead / Killed) straight from the game. Polled every second, and
+-- re-fetched right away whenever the game says someone's data changed.
+local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+local extras = Remotes and Remotes:FindFirstChild("Extras")
+local dataRemote = (extras and extras:FindFirstChild("GetPlayerData")) or ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+
+local fetching = false
+local function fetchData()
+	if fetching or not (dataRemote and dataRemote:IsA("RemoteFunction")) then return end
+	fetching = true
+	local ok, res = pcall(dataRemote.InvokeServer, dataRemote)
+	if ok and type(res) == "table" then
+		-- re-key by player name whether the game keys entries by name or carries a UserId
+		local byName = {}
+		for k, v in pairs(res) do
+			if type(v) == "table" then
+				local plr = type(k) == "string" and Players:FindFirstChild(k)
+				if not (plr and plr:IsA("Player")) then
+					plr = tonumber(v.UserId) and Players:GetPlayerByUserId(tonumber(v.UserId))
+				end
+				if plr then byName[plr.Name] = v end
+			end
+		end
+		State.data = byName
+	end
+	fetching = false
+end
+
+local gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
+for _, name in ipairs({ "PlayerDataChanged", "RoundStart", "GameOver", "KillEvent" }) do
+	local ev = gameplay and gameplay:FindFirstChild(name)
+	if ev and ev:IsA("RemoteEvent") then on(ev.OnClientEvent, function() task.spawn(fetchData) end) end
+end
+
+task.spawn(function()
+	while running() do
+		fetchData()
+		task.wait(1)
+	end
+end)
+
+-- dropped gun tracking
+State.gun = workspace:FindFirstChild("GunDrop", true)
+on(workspace.DescendantAdded, function(d)
+	if d.Name == "GunDrop" then State.gun = d end
+end)
+on(workspace.DescendantRemoving, function(d)
+	if d == State.gun then State.gun = nil end
+end)
+
+-- slow tick: map/lobby lookup and coin boxes
+task.spawn(function()
+	while running() do
+		State.map = findMap()
+		updateLobbyBox()
+		updateCoinEsp()
+		task.wait(0.5)
+	end
+end)
+
+-- per frame: players and gun
+on(RunService.RenderStepped, function()
+	updatePlayerEsp()
+	updateGunEsp()
+end)
 
 Library:Notify(NAME, "Loaded. Press " .. Library.ToggleKey.Name .. " to hide or show.", 5)
