@@ -29,7 +29,7 @@ local LP = Players.LocalPlayer
 local Flags = Library.Flags
 
 local NAME = "xpware"
-local VERSION = "0.3"
+local VERSION = "0.4"
 local function stub() end
 
 ------------------------------------------------------------------------
@@ -204,17 +204,57 @@ local function newHighlight()
 	return hl
 end
 
-local function styleHighlight(hl, color)
-	hl.OutlineColor = color
-	hl.FillColor = color
-	hl.FillTransparency = 1 - (Flags.esp_fill or 0) / 100
-	hl.DepthMode = Flags.esp_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+-- only write when the value actually changes; rewriting render props every frame causes flicker
+local function set(obj, prop, value)
+	if obj[prop] ~= value then obj[prop] = value end
+end
+
+local function outlineAlpha() return 1 - (Flags.esp_outline_opacity or 100) / 100 end
+local function fillAlpha() return 1 - (Flags.esp_fill or 0) / 100 end
+
+local function styleHighlight(hl, color, fillOverride)
+	set(hl, "OutlineColor", color)
+	set(hl, "FillColor", color)
+	set(hl, "OutlineTransparency", outlineAlpha())
+	set(hl, "FillTransparency", fillOverride or fillAlpha())
+	set(hl, "DepthMode", Flags.esp_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded)
+end
+
+-- "Thin Lines" style: a SelectionBox per body part. Highlight's outline width is fixed by
+-- the engine, SelectionBox.LineThickness is in studs so it can actually be thin.
+local function updateLines(o, c, color, visible)
+	if not visible then
+		for _, b in pairs(o.boxes) do set(b, "Visible", false) end
+		return
+	end
+	local seen = {}
+	for _, part in ipairs(c:GetChildren()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			seen[part] = true
+			local b = o.boxes[part]
+			if not b then
+				b = Instance.new("SelectionBox")
+				b.Adornee = part
+				b.Parent = espFolder
+				o.boxes[part] = b
+			end
+			set(b, "Color3", color)
+			set(b, "SurfaceColor3", color)
+			set(b, "LineThickness", (Flags.esp_thickness or 3) / 100)
+			set(b, "Transparency", outlineAlpha())
+			set(b, "SurfaceTransparency", fillAlpha())
+			set(b, "Visible", true)
+		end
+	end
+	for part, b in pairs(o.boxes) do
+		if not seen[part] then b:Destroy(); o.boxes[part] = nil end
+	end
 end
 
 local espObjs = {}
 
 local function makeEsp(p)
-	local o = { hl = newHighlight() }
+	local o = { hl = newHighlight(), boxes = {} }
 	o.bb, o.label = newBillboard()
 	if hasDrawing then
 		local ok, line = pcall(Drawing.new, "Line")
@@ -225,8 +265,9 @@ local function makeEsp(p)
 end
 
 local function hideEsp(o)
-	o.hl.Enabled = false
-	o.bb.Enabled = false
+	set(o.hl, "Enabled", false)
+	set(o.bb, "Enabled", false)
+	for _, b in pairs(o.boxes) do set(b, "Visible", false) end
 	if o.line then o.line.Visible = false end
 end
 
@@ -235,6 +276,7 @@ local function removeEsp(p)
 	if not o then return end
 	o.hl:Destroy()
 	o.bb:Destroy()
+	for _, b in pairs(o.boxes) do b:Destroy() end
 	if o.line then pcall(function() o.line:Remove() end) end
 	espObjs[p] = nil
 end
@@ -266,9 +308,11 @@ local function updatePlayerEsp()
 			else
 				local color = ROLE_COLORS[role]
 
-				o.hl.Adornee = c
+				local thin = Flags.esp_style == "Thin Lines"
+				set(o.hl, "Adornee", c)
 				styleHighlight(o.hl, color)
-				o.hl.Enabled = parts.Outline == true
+				set(o.hl, "Enabled", parts.Chams == true and not thin)
+				updateLines(o, c, color, parts.Chams == true and thin)
 
 				local top, bottom = {}, {}
 				if parts.Name then table.insert(top, p.DisplayName) end
@@ -277,10 +321,10 @@ local function updatePlayerEsp()
 				if parts.Health then table.insert(bottom, math.floor(h.Health) .. " hp") end
 				local text = table.concat(top, " ")
 				if #bottom > 0 then text = text .. (text ~= "" and "\n" or "") .. table.concat(bottom, "  ") end
-				o.bb.Adornee = c:FindFirstChild("Head") or r
-				o.label.Text = text
-				o.label.TextColor3 = color
-				o.bb.Enabled = text ~= ""
+				set(o.bb, "Adornee", c:FindFirstChild("Head") or r)
+				set(o.label, "Text", text)
+				set(o.label, "TextColor3", color)
+				set(o.bb, "Enabled", text ~= "")
 
 				if o.line then
 					local pos, onScreen = camera:WorldToViewportPoint(r.Position)
@@ -308,15 +352,14 @@ gunBB.StudsOffset = Vector3.new(0, 2, 0)
 local function updateGunEsp()
 	local gun = State.gun
 	if Flags.gun_esp and gun and gun.Parent then
-		gunHl.Adornee = gun
-		styleHighlight(gunHl, GUN_COLOR)
-		gunHl.FillTransparency = 0.4
-		gunHl.Enabled = true
-		gunBB.Adornee = partOf(gun)
-		gunBB.Enabled = true
+		set(gunHl, "Adornee", gun)
+		styleHighlight(gunHl, GUN_COLOR, 0.4)
+		set(gunHl, "Enabled", true)
+		set(gunBB, "Adornee", partOf(gun))
+		set(gunBB, "Enabled", true)
 	else
-		gunHl.Enabled = false
-		gunBB.Enabled = false
+		set(gunHl, "Enabled", false)
+		set(gunBB, "Enabled", false)
 	end
 end
 
@@ -371,12 +414,17 @@ EspPlayers:AddToggle("esp_murderer", { Text = "Murderer", Default = true })
 EspPlayers:AddToggle("esp_sheriff", { Text = "Sheriff / Hero", Default = true })
 EspPlayers:AddToggle("esp_innocent", { Text = "Innocents" })
 EspPlayers:AddToggle("esp_round_only", { Text = "Only Players In Round", Default = true, Tooltip = "Hides dead players and anyone in the lobby" })
-EspPlayers:AddDropdown("esp_parts", { Text = "Draw", Values = { "Outline", "Name", "Role", "Distance", "Health", "Tracer" }, Multi = true, Default = { "Outline", "Name", "Role" } })
+EspPlayers:AddDropdown("esp_parts", { Text = "Draw", Values = { "Chams", "Name", "Role", "Distance", "Health", "Tracer" }, Multi = true, Default = { "Chams", "Name", "Role" } })
 EspPlayers:AddSlider("esp_distance", { Text = "Max Distance", Min = 50, Max = 2000, Default = 1000, Suffix = " studs" })
+local dataLabel = EspPlayers:AddLabel("Role data: waiting...", { Color = Library.Theme.TextDim })
 
-local EspStyle = ESP:AddGroup("Outline Style", "Right")
-EspStyle:AddToggle("esp_walls", { Text = "Show Through Walls", Default = true })
-EspStyle:AddSlider("esp_fill", { Text = "Fill Opacity", Min = 0, Max = 100, Default = 15, Suffix = "%", Tooltip = "0 = outline only" })
+local EspStyle = ESP:AddGroup("Chams Style", "Right")
+EspStyle:AddDropdown("esp_style", { Text = "Style", Values = { "Outline", "Thin Lines" }, Default = "Outline",
+	Tooltip = "Outline = Roblox Highlight, fixed width. Thin Lines = a thin box on each body part." })
+EspStyle:AddSlider("esp_thickness", { Text = "Line Thickness", Min = 1, Max = 10, Default = 3, Tooltip = "Thin Lines only" })
+EspStyle:AddSlider("esp_outline_opacity", { Text = "Outline Opacity", Min = 10, Max = 100, Default = 100, Suffix = "%" })
+EspStyle:AddSlider("esp_fill", { Text = "Fill Opacity", Min = 0, Max = 100, Default = 0, Suffix = "%", Tooltip = "0 = outline only" })
+EspStyle:AddToggle("esp_walls", { Text = "Show Through Walls", Default = true, Tooltip = "Outline style only" })
 EspStyle:AddLabel("Red = murderer, blue = sheriff, gold = hero, green = innocent.", { Color = Library.Theme.TextDim })
 if not hasDrawing then
 	EspStyle:AddLabel("Tracers need the Drawing library, which this environment doesn't have.", { Color = Library.Theme.TextDim })
@@ -594,46 +642,95 @@ local _ = { murdererLabel, sheriffLabel, myRoleLabel, coinLabel }
 -- Runtime
 ------------------------------------------------------------------------
 
--- player data (Role / Dead / Killed) straight from the game. Polled every second, and
--- re-fetched right away whenever the game says someone's data changed.
+-- player data (Role / Dead / Killed) straight from the game. Polled every 2s, re-asked when the
+-- game says data changed, and merged from event payloads when they carry it.
 local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
 local extras = Remotes and Remotes:FindFirstChild("Extras")
 local dataRemote = (extras and extras:FindFirstChild("GetPlayerData")) or ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+local Data = { at = 0, count = 0, err = nil }
 
-local fetching = false
+-- re-key by player name whether the game keys entries by name or only carries a UserId
+local function rekey(res)
+	local byName, n = {}, 0
+	for k, v in pairs(res) do
+		if type(v) == "table" then
+			local plr = type(k) == "string" and Players:FindFirstChild(k)
+			if not (plr and plr:IsA("Player")) then
+				local id = tonumber(v.UserId)
+				plr = id and Players:GetPlayerByUserId(id)
+			end
+			if plr then byName[plr.Name] = v; n += 1 end
+		end
+	end
+	return byName, n
+end
+
+local inflight, inflightAt, lastAsk = false, 0, 0
 local function fetchData()
-	if fetching or not (dataRemote and dataRemote:IsA("RemoteFunction")) then return end
-	fetching = true
+	if not (dataRemote and dataRemote:IsA("RemoteFunction")) then return end
+	local now = os.clock()
+	if now - lastAsk < 0.5 then return end
+	-- a request the server never answers stops blocking new ones after 5s
+	if inflight and now - inflightAt < 5 then return end
+	inflight, inflightAt, lastAsk = true, now, now
 	local ok, res = pcall(dataRemote.InvokeServer, dataRemote)
+	if inflightAt == now then inflight = false end
 	if ok and type(res) == "table" then
-		-- re-key by player name whether the game keys entries by name or carries a UserId
-		local byName = {}
-		for k, v in pairs(res) do
-			if type(v) == "table" then
-				local plr = type(k) == "string" and Players:FindFirstChild(k)
-				if not (plr and plr:IsA("Player")) then
-					plr = tonumber(v.UserId) and Players:GetPlayerByUserId(tonumber(v.UserId))
+		local byName, n = rekey(res)
+		if n > 0 then
+			State.data, Data.at, Data.count, Data.err = byName, os.clock(), n, nil
+		else
+			Data.err = "reply had no players"
+		end
+	else
+		Data.err = ok and ("reply was " .. typeof(res)) or tostring(res)
+	end
+end
+
+-- field-by-field merge so a partial update (say, just Coins) can't wipe someone's Role
+local function mergePayload(...)
+	for i = 1, select("#", ...) do
+		local a = select(i, ...)
+		if type(a) == "table" then
+			local byName, n = rekey(a)
+			if n > 0 then
+				for name, fields in pairs(byName) do
+					local entry = State.data[name] or {}
+					for k, v in pairs(fields) do entry[k] = v end
+					State.data[name] = entry
 				end
-				if plr then byName[plr.Name] = v end
+				Data.at = os.clock()
 			end
 		end
-		State.data = byName
 	end
-	fetching = false
 end
 
 local gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
 for _, name in ipairs({ "PlayerDataChanged", "RoundStart", "GameOver", "KillEvent" }) do
 	local ev = gameplay and gameplay:FindFirstChild(name)
-	if ev and ev:IsA("RemoteEvent") then on(ev.OnClientEvent, function() task.spawn(fetchData) end) end
+	if ev and ev:IsA("RemoteEvent") then
+		on(ev.OnClientEvent, function(...)
+			pcall(mergePayload, ...)
+			task.spawn(fetchData)
+		end)
+	end
 end
 
 task.spawn(function()
 	while running() do
-		fetchData()
-		task.wait(1)
+		task.spawn(fetchData)
+		task.wait(2)
 	end
 end)
+
+local function dataStatus()
+	if not dataRemote then return "Role data: GetPlayerData not found" end
+	if Data.at == 0 then return "Role data: waiting..." .. (Data.err and (" (" .. Data.err .. ")") or "") end
+	local m
+	for name, d in pairs(State.data) do if d.Role == "Murderer" then m = name end end
+	return string.format("Role data: %d players, %ds ago%s", Data.count, math.floor(os.clock() - Data.at),
+		m and (" | murderer: " .. m) or "")
+end
 
 -- dropped gun tracking
 State.gun = workspace:FindFirstChild("GunDrop", true)
@@ -650,6 +747,7 @@ task.spawn(function()
 		State.map = findMap()
 		updateLobbyBox()
 		updateCoinEsp()
+		dataLabel:Set(dataStatus())
 		task.wait(0.5)
 	end
 end)
