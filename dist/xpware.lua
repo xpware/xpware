@@ -68,6 +68,7 @@ local Theme = {
 	Light        = hex("FFFFFF"),  -- bevel highlight lines
 	Outline      = hex("000000"),  -- tooltip / list / balloon borders
 	SelectText   = hex("FFFFFF"),
+	ButtonText   = hex("000000"),  -- push buttons stay light in every theme, so their text stays dark
 	Glyph        = hex("FFFFFF"),  -- caption button icons
 	CloseGlyph   = hex("FFFFFF"),
 	CaptionEdge  = hex("FFFFFF"),
@@ -123,7 +124,7 @@ Library.Themes = {
 		Theme = {
 			Face = "2B2F36", Panel = "23262C", PanelMid = "212429", PanelBorder = "4A505A", PanelShadow = "2A2E35",
 			Text = "E6E8EB", TextDim = "8A919C", GroupBorder = "3D434C", GroupText = "7FB2FF",
-			Field = "1B1E23", FieldBorder = "4E5866", ButtonBorder = "15181D", CheckBorder = "5A6472", Check = "5BD16B",
+			Field = "1B1E23", FieldBorder = "4E5866", ButtonBorder = "0E1013", ButtonText = "1B1E23", CheckBorder = "5A6472", Check = "5BD16B",
 			TabTop = "4C8DF6", TabTopLight = "8AB6FF", Select = "3D6FD1", SelectText = "FFFFFF", Tooltip = "30343B",
 			Light = "3A3F47", Outline = "0E1013", Etch = "454B54",
 			Track = "1A1D22", TrackShadow = "0F1114", Tick = "4A505A", ThumbBorder = "6B7586",
@@ -136,8 +137,9 @@ Library.Themes = {
 			Title        = {{0,"4A5568"},{0.08,"2D3748"},{0.40,"262F3D"},{0.88,"2B3545"},{0.93,"2B3545"},{0.95,"222A36"},{0.96,"1A202A"},{1,"1A202A"}},
 			Caption      = {{0,"6B7A90"},{0.12,"4E5B70"},{0.5,"3A4558"},{1,"2C3545"}},
 			CaptionClose = {{0,"E89A8A"},{0.12,"D06A55"},{0.5,"B5432C"},{1,"8E2A16"}},
-			Button       = {{0,"40454E"},{0.86,"353A42"},{1,"2C3037"}},
-			ButtonDown   = {{0,"25292F"},{0.08,"2C3037"},{0.94,"30343B"},{1,"383C44"}},
+			-- light buttons: dark-on-dark was nearly invisible
+			Button       = {{0,"FFFFFF"},{0.86,"E6E8EC"},{1,"CDD1D8"}},
+			ButtonDown   = {{0,"BFC4CC"},{0.08,"D4D8DE"},{0.94,"D8DCE2"},{1,"E8EAEE"}},
 			HoverRing    = {{0,"9CC2FF"},{0.3,"6FA4FF"},{0.7,"4C8DF6"},{1,"2F6FE0"}},
 			Check        = {{0,"1E2126"},{1,"2A2E35"}},
 			CheckHover   = {{0,"2F3E5A"},{1,"3D5A8A"}},
@@ -388,7 +390,7 @@ end
 local function xpButton(parent, pos, size, text)
 	local b = new("TextButton", {
 		Parent = parent, Position = pos, Size = size, BackgroundColor3 = Theme.White, BackgroundTransparency = 0,
-		Text = text or "", corner(3), stroke(Theme.ButtonBorder),
+		Text = text or "", TextColor3 = Theme.ButtonText, corner(3), stroke(Theme.ButtonBorder),
 	})
 	local g = gradient(G.Button); g.Parent = b
 	local ring = new("Frame", { Parent = b, BackgroundTransparency = 1, Position = px(2, 2), Size = ud(1, -4, 1, -4), Visible = false, corner(2) })
@@ -1470,7 +1472,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.7"
+local VERSION = "0.7.1"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
