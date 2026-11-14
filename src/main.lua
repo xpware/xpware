@@ -29,7 +29,7 @@ local LP = Players.LocalPlayer
 local Flags = Library.Flags
 
 local NAME = "xpware"
-local VERSION = "0.4.1"
+local VERSION = "0.4.2"
 local function stub() end
 
 ------------------------------------------------------------------------
@@ -238,41 +238,10 @@ local function styleHighlight(hl, color, fillOverride)
 	set(hl, "DepthMode", Flags.esp_walls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded)
 end
 
--- "Thin Lines" style: a SelectionBox per body part. Highlight's outline width is fixed by
--- the engine, SelectionBox.LineThickness is in studs so it can actually be thin.
-local function updateLines(o, c, color, visible)
-	if not visible then
-		for _, b in pairs(o.boxes) do set(b, "Visible", false) end
-		return
-	end
-	local seen = {}
-	for _, part in ipairs(c:GetChildren()) do
-		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-			seen[part] = true
-			local b = o.boxes[part]
-			if not b then
-				b = Instance.new("SelectionBox")
-				b.Adornee = part
-				b.Parent = espFolder
-				o.boxes[part] = b
-			end
-			set(b, "Color3", color)
-			set(b, "SurfaceColor3", color)
-			set(b, "LineThickness", (Flags.esp_thickness or 3) / 100)
-			set(b, "Transparency", outlineAlpha())
-			set(b, "SurfaceTransparency", fillAlpha())
-			set(b, "Visible", true)
-		end
-	end
-	for part, b in pairs(o.boxes) do
-		if not seen[part] then b:Destroy(); o.boxes[part] = nil end
-	end
-end
-
 local espObjs = {}
 
 local function makeEsp(p)
-	local o = { hl = newHighlight(), boxes = {} }
+	local o = { hl = newHighlight() }
 	o.bb, o.label = newBillboard()
 	if hasDrawing then
 		local ok, line = pcall(Drawing.new, "Line")
@@ -285,7 +254,6 @@ end
 local function hideEsp(o)
 	set(o.hl, "Enabled", false)
 	set(o.bb, "Enabled", false)
-	for _, b in pairs(o.boxes) do set(b, "Visible", false) end
 	if o.line then o.line.Visible = false end
 end
 
@@ -294,7 +262,6 @@ local function removeEsp(p)
 	if not o then return end
 	o.hl:Destroy()
 	o.bb:Destroy()
-	for _, b in pairs(o.boxes) do b:Destroy() end
 	if o.line then pcall(function() o.line:Remove() end) end
 	espObjs[p] = nil
 end
@@ -319,18 +286,15 @@ local function updatePlayerEsp()
 			local show = c ~= nil and r ~= nil and h ~= nil and h.Health > 0 and roleShown(role)
 			if show and Flags.esp_round_only and not inRound(p) then show = false end
 			local dist = (show and me) and (r.Position - me.Position).Magnitude or 0
-			if show and dist > (Flags.esp_distance or 1000) then show = false end
 
 			if not show then
 				hideEsp(o)
 			else
 				local color = ROLE_COLORS[role]
 
-				local thin = Flags.esp_style == "Thin Lines"
 				set(o.hl, "Adornee", c)
 				styleHighlight(o.hl, color)
-				set(o.hl, "Enabled", parts.Chams == true and not thin)
-				updateLines(o, c, color, parts.Chams == true and thin)
+				set(o.hl, "Enabled", parts.Chams == true)
 
 				local top, bottom = {}, {}
 				if parts.Name then table.insert(top, p.DisplayName) end
@@ -433,16 +397,12 @@ EspPlayers:AddToggle("esp_sheriff", { Text = "Sheriff / Hero", Default = true })
 EspPlayers:AddToggle("esp_innocent", { Text = "Innocents" })
 EspPlayers:AddToggle("esp_round_only", { Text = "Only Players In Round", Default = true, Tooltip = "Hides dead players and anyone in the lobby" })
 EspPlayers:AddDropdown("esp_parts", { Text = "Draw", Values = { "Chams", "Name", "Role", "Distance", "Health", "Tracer" }, Multi = true, Default = { "Chams", "Name", "Role" } })
-EspPlayers:AddSlider("esp_distance", { Text = "Max Distance", Min = 50, Max = 2000, Default = 1000, Suffix = " studs" })
 local dataLabel = EspPlayers:AddLabel("Role data: waiting...", { Color = Library.Theme.TextDim })
 
 local EspStyle = ESP:AddGroup("Chams Style", "Right")
-EspStyle:AddDropdown("esp_style", { Text = "Style", Values = { "Outline", "Thin Lines" }, Default = "Outline",
-	Tooltip = "Outline = Roblox Highlight, fixed width. Thin Lines = a thin box on each body part." })
-EspStyle:AddSlider("esp_thickness", { Text = "Line Thickness", Min = 1, Max = 10, Default = 3, Tooltip = "Thin Lines only" })
 EspStyle:AddSlider("esp_outline_opacity", { Text = "Outline Opacity", Min = 10, Max = 100, Default = 100, Suffix = "%" })
 EspStyle:AddSlider("esp_fill", { Text = "Fill Opacity", Min = 0, Max = 100, Default = 0, Suffix = "%", Tooltip = "0 = outline only" })
-EspStyle:AddToggle("esp_walls", { Text = "Show Through Walls", Default = true, Tooltip = "Outline style only" })
+EspStyle:AddToggle("esp_walls", { Text = "Show Through Walls", Default = true })
 EspStyle:AddLabel("Red = murderer, blue = sheriff, gold = hero, green = innocent.", { Color = Library.Theme.TextDim })
 if not hasDrawing then
 	EspStyle:AddLabel("Tracers need the Drawing library, which this environment doesn't have.", { Color = Library.Theme.TextDim })
