@@ -2,7 +2,7 @@
 	xpware - Murder Mystery 2
 	Engine: Roblox client (executor)  |  Language: Luau
 
-	Built tab by tab. Done: ESP. Everything else is still a stub.
+	Built tab by tab. Done: ESP, Teleport. Everything else is still a stub.
 	Where the library comes from:
 	  - bundled by build.ps1: `Library` is defined above this file
 	  - Roblox Studio: ReplicatedStorage.xpware.xpui ModuleScript
@@ -24,13 +24,16 @@ local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
+local UIS               = game:GetService("UserInputService")
 
 local LP = Players.LocalPlayer
 local Flags = Library.Flags
+local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.4.2"
+local VERSION = "0.5"
 local function stub() end
+local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
 -- Lifetime: every connection and cleanup goes through here so Unload is total
@@ -67,6 +70,7 @@ local function humOf(p) local c = p and p.Character; return c and c:FindFirstChi
 local function rootOf(p) local c = p and p.Character; return c and c:FindFirstChild("HumanoidRootPart") end
 local function isAlive(p) local h = humOf(p); return h ~= nil and h.Health > 0 and rootOf(p) ~= nil end
 local function myRoot() return rootOf(LP) end
+local function myHum() return humOf(LP) end
 
 local function partOf(inst)
 	if not inst then return nil end
@@ -376,6 +380,109 @@ local function updateCoinEsp()
 	end
 end
 
+------------------------------------------------------------------------
+-- Teleport
+------------------------------------------------------------------------
+local function findPlayer(name)
+	if type(name) ~= "string" or name == "" then return nil end
+	local p = Players:FindFirstChild(name)
+	return (p and p:IsA("Player")) and p or nil
+end
+
+local function findRole(role)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LP and inRound(p) and roleOf(p) == role then return p end
+	end
+end
+local function findSheriff() return findRole("Sheriff") or findRole("Hero") end
+
+-- the map streams in, so ask the server to load the destination before we land there
+local function streamTo(pos)
+	if workspace.StreamingEnabled then
+		pcall(function() LP:RequestStreamAroundAsync(pos, 1.5) end)
+	end
+end
+
+local function teleport(cf, skipStream)
+	local c, r, h = LP.Character, myRoot(), myHum()
+	if not (c and r) then notify("You don't have a character right now.") return false end
+	if not skipStream then streamTo(cf.Position) end
+	if h and h.Sit then h.Sit = false end
+	r.AssemblyLinearVelocity = Vector3.zero
+	c:PivotTo(cf)
+	return true
+end
+
+local function spawnCFrame(model)
+	local spawns = model and model:FindFirstChild("Spawns")
+	local list = {}
+	if spawns then
+		for _, s in ipairs(spawns:GetDescendants()) do
+			if s:IsA("BasePart") then table.insert(list, s) end
+		end
+	end
+	if #list > 0 then return list[math.random(#list)].CFrame + Vector3.new(0, 4, 0) end
+end
+
+local function tpLobby()
+	local lobby = workspace:FindFirstChild("Lobby")
+	if not lobby then notify("Couldn't find the lobby.") return end
+	local cf = spawnCFrame(lobby) or (lobby:GetPivot() + Vector3.new(0, 5, 0))
+	teleport(cf)
+end
+
+local function tpMap()
+	local map = State.map or findMap()
+	if not map then notify("No round running right now.") return end
+	-- spawns may not be streamed in yet: load around the map first, then look again
+	local cf = spawnCFrame(map)
+	if not cf then
+		streamTo(map:GetPivot().Position)
+		cf = spawnCFrame(map)
+	end
+	if not cf then notify("The map's spawns haven't loaded yet, try again in a second.") return end
+	teleport(cf)
+end
+
+local function tpGun()
+	local part = partOf(State.gun)
+	if not part then notify("The gun isn't dropped.") return end
+	teleport(part.CFrame + Vector3.new(0, 3, 0))
+end
+
+local function tpPlayer(p, label)
+	local r = rootOf(p)
+	if not r then notify(label .. " not found.") return end
+	teleport(r.CFrame * CFrame.new(0, 0, 3))
+end
+
+-- safe spot: a platform only we can see, 300 studs above where we were standing
+local safePart, safeReturn
+local function setSafeSpot(on)
+	if on then
+		local r = myRoot()
+		if not r then
+			notify("You don't have a character right now.")
+			task.defer(function() Options.safe_spot:Set(false) end)
+			return
+		end
+		safeReturn = r.CFrame
+		safePart = Instance.new("Part")
+		safePart.Name = HttpService:GenerateGUID(false)
+		safePart.Anchored = true
+		safePart.Size = Vector3.new(20, 1, 20)
+		safePart.Transparency = 0.5
+		safePart.Position = r.Position + Vector3.new(0, 300, 0)
+		safePart.Parent = workspace
+		teleport(safePart.CFrame + Vector3.new(0, 3.5, 0), true)
+	else
+		if safeReturn and myRoot() then teleport(safeReturn) end
+		if safePart then safePart:Destroy() end
+		safePart, safeReturn = nil, nil
+	end
+end
+onUnload(function() if safePart then safePart:Destroy() end end)
+
 local function otherNames()
 	local t = {}
 	for _, p in ipairs(Players:GetPlayers()) do
@@ -439,18 +546,21 @@ Murderer:AddButton({ Text = "Kill All", Callback = stub })
 local Teleport = Window:AddTab("Teleport")
 
 local Places = Teleport:AddGroup("Places", "Left")
-Places:AddButton({ Text = "Lobby", Callback = stub })
-Places:AddButton({ Text = "Map", Callback = stub })
-Places:AddButton({ Text = "Dropped Gun", Callback = stub })
+Places:AddButton({ Text = "Lobby", Callback = tpLobby })
+Places:AddButton({ Text = "Map", Callback = tpMap })
+Places:AddButton({ Text = "Dropped Gun", Callback = tpGun })
 Places:AddDivider()
-Places:AddToggle("safe_spot", { Text = "Safe Spot", Tooltip = "Parks you on a platform high above the map. Turn off to go back.", Callback = stub })
-Places:AddToggle("click_tp", { Text = "Ctrl + Click Teleport", Callback = stub })
+Places:AddToggle("safe_spot", { Text = "Safe Spot", Tooltip = "Parks you on a platform 300 studs up. Turn off to go back.", Callback = setSafeSpot })
+Places:AddToggle("click_tp", { Text = "Ctrl + Click Teleport" })
 
 local ToPlayer = Teleport:AddGroup("Players", "Right")
-local tpTarget = ToPlayer:AddDropdown("tp_target", { Text = "Player", Values = otherNames(), Callback = stub })
-ToPlayer:AddButton({ Text = "Teleport To Player", Callback = stub })
-ToPlayer:AddButton({ Text = "Teleport To Murderer", Callback = stub })
-ToPlayer:AddButton({ Text = "Teleport To Sheriff", Callback = stub })
+local tpTarget = ToPlayer:AddDropdown("tp_target", { Text = "Player", Values = otherNames() })
+ToPlayer:AddButton({ Text = "Teleport To Player", Callback = function()
+	local p = findPlayer(Flags.tp_target)
+	if p then tpPlayer(p, "Player") else notify("Pick a player first.") end
+end })
+ToPlayer:AddButton({ Text = "Teleport To Murderer", Callback = function() tpPlayer(findRole("Murderer"), "Murderer") end })
+ToPlayer:AddButton({ Text = "Teleport To Sheriff", Callback = function() tpPlayer(findSheriff(), "Sheriff") end })
 
 ------------------------------------------------------------------------
 -- Trolling
@@ -735,6 +845,25 @@ end)
 on(RunService.RenderStepped, function()
 	updatePlayerEsp()
 	updateGunEsp()
+end)
+
+-- ctrl + click teleport (clicks on the UI come through as gameProcessed and are ignored)
+on(UIS.InputBegan, function(input, gp)
+	if gp or not Flags.click_tp or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+	if not (UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)) then return end
+	local mouse = LP:GetMouse()
+	local r = myRoot()
+	if mouse.Target and r then
+		teleport(CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0)) * r.CFrame.Rotation, true)
+	end
+end)
+
+-- respawning: the safe spot belongs to the old body, don't drag the new one back to it
+on(LP.CharacterAdded, function()
+	if Flags.safe_spot then
+		safeReturn = nil
+		Options.safe_spot:Set(false)
+	end
 end)
 
 Library:Notify(NAME, "Loaded. Press " .. Library.ToggleKey.Name .. " to hide or show.", 5)
