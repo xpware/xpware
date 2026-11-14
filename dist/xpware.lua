@@ -63,6 +63,31 @@ local Theme = {
 	White        = hex("FFFFFF"),
 	Black        = hex("000000"),
 	Etch         = hex("ACA899"),
+	-- split out of White/Black so dark themes can recolor surfaces without touching glyphs
+	Field        = hex("FFFFFF"),  -- input / dropdown backgrounds
+	Light        = hex("FFFFFF"),  -- bevel highlight lines
+	Outline      = hex("000000"),  -- tooltip / list / balloon borders
+	SelectText   = hex("FFFFFF"),
+	Glyph        = hex("FFFFFF"),  -- caption button icons
+	CloseGlyph   = hex("FFFFFF"),
+	CaptionEdge  = hex("FFFFFF"),
+	TitleText    = hex("FFFFFF"),
+	TitleShadow  = hex("0A1883"),
+	Hover        = hex("E5A01A"),
+	HoverStroke  = hex("F8B330"),
+	Track        = hex("F3F2EC"),
+	TrackShadow  = hex("9D9C99"),
+	Tick         = hex("A1A192"),
+	ThumbBorder  = hex("7C8CA8"),
+	ComboBorder  = hex("B9CDF7"),
+	ComboGlyph   = hex("4D6185"),
+	Scrollbar    = hex("A9B8D9"),
+	NotifGlyph   = hex("4A4A4A"),
+	Grip         = hex("B9B6A6"),
+	PanelShadow  = hex("D6D3CE"),
+	FrameEdge    = hex("0831D9"),
+	FrameLeft    = { "0831D9", "166AEE", "0855DD" },
+	FrameRight   = { "00138C", "001EA0", "003BDA" },
 }
 Library.Theme = Theme
 
@@ -80,7 +105,134 @@ local G = {
 	Thumb        = {{0,"FFFFFF"},{1,"E2E1D9"}},
 	ComboBtn     = {{0,"E6EEFC"},{0.5,"C6D6F7"},{1,"B1C7F5"}},
 	ComboHover   = {{0,"FDFFFF"},{0.5,"DDE8FE"},{1,"C3D6FD"}},
+	InfoIcon     = {{0,"6FA8FF"},{0.5,"1F6FE8"},{1,"0E4FC0"}},
 }
+
+------------------------------------------------------------------------
+-- Themes. Each one only lists what differs from Classic (the values above).
+-- Strings are hex colors; tables in G are gradient stops. Call SetTheme BEFORE CreateWindow:
+-- colors are baked in when the instances are built.
+------------------------------------------------------------------------
+local BASE_THEME, BASE_G = table.clone(Theme), table.clone(G)
+
+Library.ThemeOrder = { "Classic", "Dark", "Rose", "Olive", "Silver" }
+Library.Themes = {
+	Classic = {},
+
+	Dark = {
+		Theme = {
+			Face = "2B2F36", Panel = "23262C", PanelMid = "212429", PanelBorder = "4A505A", PanelShadow = "2A2E35",
+			Text = "E6E8EB", TextDim = "8A919C", GroupBorder = "3D434C", GroupText = "7FB2FF",
+			Field = "1B1E23", FieldBorder = "4E5866", ButtonBorder = "15181D", CheckBorder = "5A6472", Check = "5BD16B",
+			TabTop = "4C8DF6", TabTopLight = "8AB6FF", Select = "3D6FD1", SelectText = "FFFFFF", Tooltip = "30343B",
+			Light = "3A3F47", Outline = "0E1013", Etch = "454B54",
+			Track = "1A1D22", TrackShadow = "0F1114", Tick = "4A505A", ThumbBorder = "6B7586",
+			Hover = "4C8DF6", HoverStroke = "6FA4FF", ComboBorder = "4A5566", ComboGlyph = "C9D2E0",
+			Scrollbar = "4A5262", NotifGlyph = "B8BEC8", Grip = "4A505A",
+			TitleText = "F0F2F5", TitleShadow = "000000", CaptionEdge = "5A6578",
+			FrameEdge = "3A4252", FrameLeft = { "3A4252", "4A5366", "404859" }, FrameRight = { "15181E", "1C2028", "2C3341" },
+		},
+		G = {
+			Title        = {{0,"4A5568"},{0.08,"2D3748"},{0.40,"262F3D"},{0.88,"2B3545"},{0.93,"2B3545"},{0.95,"222A36"},{0.96,"1A202A"},{1,"1A202A"}},
+			Caption      = {{0,"6B7A90"},{0.12,"4E5B70"},{0.5,"3A4558"},{1,"2C3545"}},
+			CaptionClose = {{0,"E89A8A"},{0.12,"D06A55"},{0.5,"B5432C"},{1,"8E2A16"}},
+			Button       = {{0,"40454E"},{0.86,"353A42"},{1,"2C3037"}},
+			ButtonDown   = {{0,"25292F"},{0.08,"2C3037"},{0.94,"30343B"},{1,"383C44"}},
+			HoverRing    = {{0,"9CC2FF"},{0.3,"6FA4FF"},{0.7,"4C8DF6"},{1,"2F6FE0"}},
+			Check        = {{0,"1E2126"},{1,"2A2E35"}},
+			CheckHover   = {{0,"2F3E5A"},{1,"3D5A8A"}},
+			TabIdle      = {{0,"363A42"},{0.8,"2E3239"},{1,"2A2D33"}},
+			Panel        = {{0,"23262C"},{1,"1F2227"}},
+			Thumb        = {{0,"5A616D"},{1,"434953"}},
+			ComboBtn     = {{0,"404754"},{0.5,"363C47"},{1,"2E343E"}},
+			ComboHover   = {{0,"4C5463"},{0.5,"424957"},{1,"39404C"}},
+		},
+	},
+
+	Rose = {
+		Theme = {
+			Face = "FBEFF3", Panel = "FFFBFC", PanelMid = "FDF5F8", PanelBorder = "D9A9BC", PanelShadow = "EED6DF",
+			Text = "3A2430", TextDim = "B494A3", GroupBorder = "EBC9D6", GroupText = "C2477A",
+			FieldBorder = "E2A8BF", ButtonBorder = "B5517C", CheckBorder = "C0648B", Check = "D4477F",
+			TabTop = "E86A9A", TabTopLight = "F9B5CF", Select = "E98AB0", Tooltip = "FFF4F8", Etch = "D9B8C6",
+			Track = "F7E6ED", TrackShadow = "C9A3B3", Tick = "D2AFBE", ThumbBorder = "C08AA0",
+			Hover = "E86A9A", HoverStroke = "F29BBA", ComboBorder = "F2C2D5", ComboGlyph = "9C4A6E",
+			Scrollbar = "E8B5CA", NotifGlyph = "7A5566", Grip = "D9B3C2", TitleShadow = "A04A6E",
+			FrameEdge = "E48AAE", FrameLeft = { "E48AAE", "F5B8CF", "EC9BBC" }, FrameRight = { "B8577F", "C9668F", "DE80A6" },
+		},
+		G = {
+			Title        = {{0,"FFD6E4"},{0.08,"F7A8C4"},{0.40,"F29BBA"},{0.88,"F6A9C5"},{0.93,"F6A9C5"},{0.95,"E68BAD"},{0.96,"D27497"},{1,"D27497"}},
+			Caption      = {{0,"FFEFF5"},{0.12,"FBCFE0"},{0.5,"EE9DBC"},{1,"D9799D"}},
+			CaptionClose = {{0,"FBD3DC"},{0.12,"F09AAC"},{0.5,"DC5A78"},{1,"BC3A5A"}},
+			Button       = {{0,"FFFFFF"},{0.86,"FBEDF2"},{1,"F0D5DF"}},
+			ButtonDown   = {{0,"EBCAD7"},{0.08,"F5DCE5"},{0.94,"F7E0E8"},{1,"FDF3F7"}},
+			HoverRing    = {{0,"FFE6F0"},{0.3,"FBC1D7"},{0.7,"F49ABD"},{1,"E2779F"}},
+			Check        = {{0,"F2DCE4"},{1,"FFFFFF"}},
+			CheckHover   = {{0,"FFE6F0"},{1,"F49ABD"}},
+			TabIdle      = {{0,"FFFFFF"},{0.8,"FBF0F4"},{1,"F6E3EB"}},
+			Panel        = {{0,"FFFBFC"},{1,"FBF0F4"}},
+			Thumb        = {{0,"FFFFFF"},{1,"F2DDE5"}},
+			ComboBtn     = {{0,"FDEFF5"},{0.5,"F8D3E2"},{1,"F2BDD2"}},
+			ComboHover   = {{0,"FFFAFC"},{0.5,"FBE3EC"},{1,"F7CFDF"}},
+			InfoIcon     = {{0,"FBB6D0"},{0.5,"E8709D"},{1,"C9497A"}},
+		},
+	},
+
+	-- the other two schemes XP itself shipped next to blue
+	Olive = {
+		Theme = {
+			GroupText = "5A7A2A", FieldBorder = "A4B97F", ButtonBorder = "4E6230", CheckBorder = "5E7A36",
+			TabTop = "8CA34E", TabTopLight = "C5D99A", Select = "93A070",
+			ThumbBorder = "8A9A6A", ComboBorder = "C3D59E", ComboGlyph = "4E6230", Scrollbar = "B7C79A",
+			TitleShadow = "4A5A2A",
+			FrameEdge = "7A9150", FrameLeft = { "7A9150", "A2B77E", "8DA466" }, FrameRight = { "4E6230", "5F743C", "7A9150" },
+		},
+		G = {
+			Title      = {{0,"C3D3A0"},{0.08,"9EB574"},{0.40,"8FA765"},{0.88,"9BB26F"},{0.93,"9BB26F"},{0.95,"8AA05E"},{0.96,"6E8448"},{1,"6E8448"}},
+			Caption    = {{0,"E8F0D4"},{0.12,"C2D49B"},{0.5,"94AB66"},{1,"728A48"}},
+			ComboBtn   = {{0,"F0F5E0"},{0.5,"D5E2B6"},{1,"C3D59E"}},
+			ComboHover = {{0,"FDFFF6"},{0.5,"E6EFD0"},{1,"D4E3B5"}},
+			InfoIcon   = {{0,"B4CF7D"},{0.5,"7FA33D"},{1,"5E7F27"}},
+		},
+	},
+
+	Silver = {
+		Theme = {
+			Face = "E0DFE3", Panel = "FCFCFE", PanelMid = "F7F7FA", PanelBorder = "9D9DAE", PanelShadow = "D4D3DA",
+			GroupBorder = "CFCFDA", GroupText = "3D4466", FieldBorder = "A5ACB5", ButtonBorder = "4A4E63", CheckBorder = "5E6178",
+			TabTop = "8C90A8", TabTopLight = "D3D6E6", Select = "7F87A8",
+			ThumbBorder = "8E92A8", ComboBorder = "C5C5D3", ComboGlyph = "4A4E63", Scrollbar = "B9BCCB",
+			Glyph = "2A2A3A", TitleText = "1A1A28", TitleShadow = "FFFFFF", CaptionEdge = "F4F4F8",
+			FrameEdge = "8E8EA0", FrameLeft = { "A5A5B6", "D4D4DE", "BFBFCC" }, FrameRight = { "6B6B80", "85859A", "A5A5B6" },
+		},
+		G = {
+			Title      = {{0,"FFFFFF"},{0.08,"E3E3EC"},{0.40,"C9C9D6"},{0.88,"D8D8E2"},{0.93,"D8D8E2"},{0.95,"BDBDCB"},{0.96,"A5A5B6"},{1,"A5A5B6"}},
+			Caption    = {{0,"FFFFFF"},{0.12,"F0F0F5"},{0.5,"D3D3DD"},{1,"B9B9C8"}},
+			Panel      = {{0,"FCFCFE"},{1,"F1F1F5"}},
+			ComboBtn   = {{0,"F5F5FA"},{0.5,"E0E0EA"},{1,"CECEDB"}},
+			ComboHover = {{0,"FFFFFF"},{0.5,"ECECF3"},{1,"DCDCE6"}},
+			InfoIcon   = {{0,"C7CCE0"},{0.5,"8E96B8"},{1,"6B7396"}},
+		},
+	},
+}
+
+-- the full color set for a theme, without touching the live tables (used by previews too)
+local function resolveTheme(name)
+	local t = Library.Themes[name] or Library.Themes.Classic
+	local th, g = table.clone(BASE_THEME), table.clone(BASE_G)
+	for k, v in pairs(t.Theme or {}) do th[k] = type(v) == "string" and hex(v) or v end
+	for k, v in pairs(t.G or {}) do g[k] = v end
+	return th, g
+end
+
+function Library:SetTheme(name)
+	if not self.Themes[name] then name = "Classic" end
+	local th, g = resolveTheme(name)
+	-- mutate in place: everything holds references to these two tables
+	for k, v in pairs(th) do Theme[k] = v end
+	for k, v in pairs(g) do G[k] = v end
+	self.ThemeName = name
+end
 
 local FONT        = Font.fromEnum(Enum.Font.Arial)
 local FONT_BOLD   = Font.new(FONT.Family, Enum.FontWeight.Bold)
@@ -240,7 +392,7 @@ local function xpButton(parent, pos, size, text)
 	})
 	local g = gradient(G.Button); g.Parent = b
 	local ring = new("Frame", { Parent = b, BackgroundTransparency = 1, Position = px(2, 2), Size = ud(1, -4, 1, -4), Visible = false, corner(2) })
-	local rs = stroke(hex("F8B330"), 2); rs.Parent = ring
+	local rs = stroke(Theme.HoverStroke, 2); rs.Parent = ring
 	gradient(G.HoverRing).Parent = rs
 
 	connect(b.MouseEnter, function() ring.Visible = true end)
@@ -354,17 +506,17 @@ function Group:AddSlider(flag, o)
 	local valueLabel = new("TextLabel", { Parent = row, Position = ud(1, -60, 0, 0), Size = px(60, 14), TextXAlignment = Enum.TextXAlignment.Right })
 
 	local area = new("TextButton", { Parent = row, Position = px(0, 15), Size = ud(1, 0, 0, 25) })
-	local track = new("Frame", { Parent = area, Position = px(5, 8), Size = ud(1, -10, 0, 4), BackgroundColor3 = hex("F3F2EC") })
-	box(track, px(0, 0), ud(1, 0, 0, 1), hex("9D9C99"))
-	box(track, px(0, 0), ud(0, 1, 1, 0), hex("9D9C99"))
-	box(track, ud(0, 0, 1, -1), ud(1, 0, 0, 1), Theme.White)
-	box(track, ud(1, -1, 0, 0), ud(0, 1, 1, 0), Theme.White)
+	local track = new("Frame", { Parent = area, Position = px(5, 8), Size = ud(1, -10, 0, 4), BackgroundColor3 = Theme.Track })
+	box(track, px(0, 0), ud(1, 0, 0, 1), Theme.TrackShadow)
+	box(track, px(0, 0), ud(0, 1, 1, 0), Theme.TrackShadow)
+	box(track, ud(0, 0, 1, -1), ud(1, 0, 0, 1), Theme.Light)
+	box(track, ud(1, -1, 0, 0), ud(0, 1, 1, 0), Theme.Light)
 	for i = 0, 10 do
-		box(area, ud(i / 10, 5 - i, 0, 21), px(1, 3), hex("A1A192"))
+		box(area, ud(i / 10, 5 - i, 0, 21), px(1, 3), Theme.Tick)
 	end
 
 	local thumb = new("Frame", { Parent = area, AnchorPoint = Vector2.new(0.5, 0), Size = px(9, 15), BackgroundColor3 = Theme.White, corner(2), gradient(G.Thumb) })
-	local thumbStroke = stroke(hex("7C8CA8")); thumbStroke.Parent = thumb
+	local thumbStroke = stroke(Theme.ThumbBorder); thumbStroke.Parent = thumb
 	box(thumb, ud(0, 1, 1, -3), ud(1, -2, 0, 2), Theme.Check)
 
 	local function fmt(v)
@@ -401,8 +553,8 @@ function Group:AddSlider(flag, o)
 	connect(UIS.InputEnded, function(input)
 		if isPress(input) then dragging = false end
 	end)
-	connect(area.MouseEnter, function() thumbStroke.Color = hex("E5A01A") end)
-	connect(area.MouseLeave, function() thumbStroke.Color = hex("7C8CA8") end)
+	connect(area.MouseEnter, function() thumbStroke.Color = Theme.Hover end)
+	connect(area.MouseLeave, function() thumbStroke.Color = Theme.ThumbBorder end)
 
 	S.Value = nil
 	apply(o.Default or min, false)
@@ -432,18 +584,18 @@ function Group:AddDropdown(flag, o)
 
 	local row = new("Frame", { Parent = self._content, BackgroundTransparency = 1, Size = ud(1, 0, 0, 39), LayoutOrder = self:_next() })
 	new("TextLabel", { Parent = row, Size = ud(1, 0, 0, 14), Text = o.Text or flag, TextXAlignment = Enum.TextXAlignment.Left })
-	local field = new("TextButton", { Parent = row, Position = px(1, 17), Size = ud(1, -2, 0, 21), BackgroundColor3 = Theme.White, BackgroundTransparency = 0, stroke(Theme.FieldBorder) })
+	local field = new("TextButton", { Parent = row, Position = px(1, 17), Size = ud(1, -2, 0, 21), BackgroundColor3 = Theme.Field, BackgroundTransparency = 0, stroke(Theme.FieldBorder) })
 	local fieldText = new("TextLabel", { Parent = field, Position = px(4, 0), Size = ud(1, -26, 1, 0), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd })
-	local arrow = new("Frame", { Parent = field, Position = ud(1, -18, 0, 2), Size = px(16, 17), BackgroundColor3 = Theme.White, corner(2), stroke(hex("B9CDF7")) })
+	local arrow = new("Frame", { Parent = field, Position = ud(1, -18, 0, 2), Size = px(16, 17), BackgroundColor3 = Theme.White, corner(2), stroke(Theme.ComboBorder) })
 	local ag = gradient(G.ComboBtn); ag.Parent = arrow
-	segment(arrow, 4, 7, 8, 11, 2, hex("4D6185"))
-	segment(arrow, 8, 11, 12, 7, 2, hex("4D6185"))
+	segment(arrow, 4, 7, 8, 11, 2, Theme.ComboGlyph)
+	segment(arrow, 8, 11, 12, 7, 2, Theme.ComboGlyph)
 
 	local listFrame = new("ScrollingFrame", {
-		Parent = Library._overlay, Visible = false, BackgroundColor3 = Theme.White, ZIndex = 5,
-		ScrollBarThickness = 4, ScrollBarImageColor3 = hex("A9B8D9"), CanvasSize = UDim2.new(),
+		Parent = Library._overlay, Visible = false, BackgroundColor3 = Theme.Field, ZIndex = 5,
+		ScrollBarThickness = 4, ScrollBarImageColor3 = Theme.Scrollbar, CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y,
-		stroke(Theme.Black), list(),
+		stroke(Theme.Outline), list(),
 	})
 
 	local function display()
@@ -481,7 +633,7 @@ function Group:AddDropdown(flag, o)
 		local function highlight(item)
 			if lit and lit.Parent then lit.BackgroundTransparency = 1; lit.Label.TextColor3 = Theme.Text end
 			lit = item
-			if item then item.BackgroundTransparency = 0; item.Label.TextColor3 = Theme.White end
+			if item then item.BackgroundTransparency = 0; item.Label.TextColor3 = Theme.SelectText end
 		end
 		for i, v in ipairs(values) do
 			local it = new("TextButton", { Parent = listFrame, Size = ud(1, 0, 0, 16), LayoutOrder = i, BackgroundTransparency = 1, BackgroundColor3 = Theme.Select })
@@ -632,7 +784,7 @@ function Group:AddTextbox(flag, o)
 
 	local row = new("Frame", { Parent = self._content, BackgroundTransparency = 1, Size = ud(1, 0, 0, 39), LayoutOrder = self:_next() })
 	new("TextLabel", { Parent = row, Size = ud(1, 0, 0, 14), Text = o.Text or flag, TextXAlignment = Enum.TextXAlignment.Left })
-	local field = new("Frame", { Parent = row, Position = px(1, 17), Size = ud(1, -2, 0, 21), BackgroundColor3 = Theme.White, stroke(Theme.FieldBorder) })
+	local field = new("Frame", { Parent = row, Position = px(1, 17), Size = ud(1, -2, 0, 21), BackgroundColor3 = Theme.Field, stroke(Theme.FieldBorder) })
 	local tb = new("TextBox", {
 		Parent = field, Position = px(4, 0), Size = ud(1, -8, 1, 0), Text = X.Value,
 		PlaceholderText = o.Placeholder or "", PlaceholderColor3 = Theme.TextDim,
@@ -671,7 +823,7 @@ end
 function Group:AddDivider()
 	local row = new("Frame", { Parent = self._content, BackgroundTransparency = 1, Size = ud(1, 0, 0, 6), LayoutOrder = self:_next() })
 	box(row, px(0, 2), ud(1, 0, 0, 1), Theme.Etch)
-	box(row, px(0, 3), ud(1, 0, 0, 1), Theme.White)
+	box(row, px(0, 3), ud(1, 0, 0, 1), Theme.Light)
 end
 
 ------------------------------------------------------------------------
@@ -693,19 +845,19 @@ function Library:Notify(title, text, duration)
 		GroupTransparency = 1, LayoutOrder = math.floor(os.clock() * 1000) % 1e9,
 	})
 	local tx = width - 40
-	new("Frame", { Parent = cg, AnchorPoint = Vector2.new(0.5, 0.5), Position = px(tx, bodyH + 1), Size = px(11, 11), Rotation = 45, BackgroundColor3 = Theme.Tooltip, stroke(Theme.Black) })
-	local body = new("TextButton", { Parent = cg, Position = px(1, 1), Size = px(width - 2, bodyH), BackgroundTransparency = 0, BackgroundColor3 = Theme.Tooltip, corner(7), stroke(Theme.Black) })
+	new("Frame", { Parent = cg, AnchorPoint = Vector2.new(0.5, 0.5), Position = px(tx, bodyH + 1), Size = px(11, 11), Rotation = 45, BackgroundColor3 = Theme.Tooltip, stroke(Theme.Outline) })
+	local body = new("TextButton", { Parent = cg, Position = px(1, 1), Size = px(width - 2, bodyH), BackgroundTransparency = 0, BackgroundColor3 = Theme.Tooltip, corner(7), stroke(Theme.Outline) })
 	box(body, px(tx - 7, bodyH - 1), px(12, 2), Theme.Tooltip) -- hides the stroke where the tail joins
 
-	local icon = new("Frame", { Parent = body, Position = px(8, 8), Size = px(16, 16), BackgroundColor3 = hex("FFFFFF"), corner(8), gradient({{0,"6FA8FF"},{0.5,"1F6FE8"},{1,"0E4FC0"}}) })
+	local icon = new("Frame", { Parent = body, Position = px(8, 8), Size = px(16, 16), BackgroundColor3 = Theme.White, corner(8), gradient(G.InfoIcon) })
 	new("TextLabel", { Parent = icon, Size = ud(1, 0, 1, 0), Text = "i", FontFace = FONT_BOLD, TextSize = 13, TextColor3 = Theme.White })
 	new("TextLabel", { Parent = body, Position = px(30, 8), Size = ud(1, -60, 0, 16), Text = title, FontFace = FONT_BOLD, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd })
 	new("TextLabel", { Parent = body, Position = px(10, 28), Size = ud(1, -20, 0, textH), Text = text, TextSize = 12, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top })
 
-	local close = new("TextButton", { Parent = body, Position = ud(1, -22, 0, 7), Size = px(14, 14), BackgroundColor3 = Theme.White, BackgroundTransparency = 1, corner(2) })
+	local close = new("TextButton", { Parent = body, Position = ud(1, -22, 0, 7), Size = px(14, 14), BackgroundColor3 = Theme.Field, BackgroundTransparency = 1, corner(2) })
 	local cs = stroke(Theme.Etch); cs.Enabled = false; cs.Parent = close
-	segment(close, 4, 4, 10, 10, 1.5, hex("4A4A4A"))
-	segment(close, 10, 4, 4, 10, 1.5, hex("4A4A4A"))
+	segment(close, 4, 4, 10, 10, 1.5, Theme.NotifGlyph)
+	segment(close, 10, 4, 4, 10, 1.5, Theme.NotifGlyph)
 	connect(close.MouseEnter, function() cs.Enabled = true; close.BackgroundTransparency = 0 end)
 	connect(close.MouseLeave, function() cs.Enabled = false; close.BackgroundTransparency = 1 end)
 
@@ -720,6 +872,106 @@ function Library:Notify(title, text, duration)
 	connect(body.MouseButton1Click, dismiss)
 	tween(cg, 0.2, { GroupTransparency = 0 })
 	task.delay(duration, dismiss)
+end
+
+------------------------------------------------------------------------
+-- First-run theme picker: a preview card per theme, yields until one is chosen.
+-- Returns the theme name; the caller saves it and calls SetTheme before CreateWindow.
+------------------------------------------------------------------------
+function Library:PickTheme(opt)
+	opt = opt or {}
+	self:SetTheme("Classic") -- the picker itself always wears Classic
+	local selected = self.Themes[opt.Default or ""] and opt.Default or "Classic"
+
+	local gui = new("ScreenGui", {
+		Name = HttpService:GenerateGUID(false):sub(1, 8), ResetOnSpawn = false, IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 10000,
+	})
+	mount(gui)
+	new("Frame", { Parent = gui, Size = ud(1, 0, 1, 0), BackgroundColor3 = Theme.Black, BackgroundTransparency = 0.45 })
+
+	local CARD_W, CARD_H, GAP, TITLE_H = 96, 112, 10, 30
+	local count = #self.ThemeOrder
+	local W = 24 + count * CARD_W + (count - 1) * GAP
+	local H = TITLE_H + 242
+	local win = new("Frame", {
+		Parent = gui, AnchorPoint = Vector2.new(0.5, 0.5), Position = ud(0.5, 0, 0.5, 0), Size = px(W, H), BackgroundTransparency = 1,
+	})
+	new("TextButton", { Parent = win, Modal = true, BackgroundTransparency = 1, Size = px(1, 1) }) -- frees the mouse
+
+	local titleBar = new("Frame", {
+		Parent = win, Size = ud(1, 0, 0, TITLE_H + 8), BackgroundColor3 = Theme.White,
+		corner(8), gradient(scaled(G.Title, TITLE_H / (TITLE_H + 8))),
+	})
+	logo(titleBar, 7, 7, 16, 2)
+	local title = opt.Title or "xpware"
+	new("TextLabel", { Parent = titleBar, Position = px(29, 1), Size = ud(1, -36, 0, TITLE_H), Text = title, FontFace = FONT_BOLD, TextSize = 14, TextColor3 = Theme.TitleShadow, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 2 })
+	new("TextLabel", { Parent = titleBar, Position = px(28, 0), Size = ud(1, -36, 0, TITLE_H), Text = title, FontFace = FONT_BOLD, TextSize = 14, TextColor3 = Theme.TitleText, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3 })
+
+	local body = new("Frame", { Parent = win, Position = px(0, TITLE_H), Size = ud(1, 0, 1, -TITLE_H), BackgroundColor3 = hex(Theme.FrameLeft[2]) })
+	local face = new("Frame", { Parent = body, Position = px(3, 0), Size = ud(1, -6, 1, -3), BackgroundColor3 = Theme.Face })
+	new("TextLabel", { Parent = face, Position = px(12, 10), Size = ud(1, -24, 0, 18), Text = "Choose a theme", FontFace = FONT_BOLD, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left })
+	new("TextLabel", { Parent = face, Position = px(12, 30), Size = ud(1, -24, 0, 14), Text = "Click one to select it. You can change it later in Settings.", TextSize = 12, TextColor3 = hex("5A5A5A"), TextXAlignment = Enum.TextXAlignment.Left })
+
+	local done = Instance.new("BindableEvent")
+	local finished = false
+	local function confirm()
+		if finished then return end
+		finished = true
+		done:Fire()
+	end
+
+	local rings = {}
+	local function refreshSelection()
+		for name, ring in pairs(rings) do ring.Visible = name == selected end
+	end
+
+	local lastClickName, lastClickAt = nil, 0
+	for i, name in ipairs(self.ThemeOrder) do
+		local th, g = resolveTheme(name)
+		local card = new("TextButton", { Parent = face, Position = px(12 + (i - 1) * (CARD_W + GAP), 56), Size = px(CARD_W, CARD_H + 22) })
+		rings[name] = new("Frame", {
+			Parent = card, Position = px(-3, -3), Size = px(CARD_W + 6, CARD_H + 6), BackgroundTransparency = 1, Visible = false,
+			corner(6), stroke(Theme.HoverStroke, 2),
+		})
+		local prev = new("Frame", { Parent = card, Size = px(CARD_W, CARD_H), BackgroundColor3 = th.Face, ClipsDescendants = true, corner(4), stroke(Theme.PanelBorder) })
+
+		-- title bar with its caption buttons
+		local strip = new("Frame", { Parent = prev, Size = ud(1, 0, 0, 18), BackgroundColor3 = Theme.White, gradient(g.Title) })
+		new("Frame", { Parent = strip, Position = ud(1, -15, 0, 3), Size = px(12, 12), BackgroundColor3 = Theme.White, corner(2), gradient(g.CaptionClose, 45) })
+		new("Frame", { Parent = strip, Position = ud(1, -29, 0, 3), Size = px(12, 12), BackgroundColor3 = Theme.White, corner(2), gradient(g.Caption, 45) })
+		new("Frame", { Parent = strip, Position = px(6, 7), Size = px(30, 4), BackgroundColor3 = th.TitleText })
+
+		-- a tiny group box: label, checkbox, text field, selected row, button
+		local panel = new("Frame", { Parent = prev, Position = px(6, 24), Size = ud(1, -12, 1, -30), BackgroundColor3 = Theme.White, gradient(g.Panel), stroke(th.PanelBorder) })
+		new("TextLabel", { Parent = panel, Position = px(6, 3), Size = px(60, 14), Text = "Group", TextSize = 11, TextColor3 = th.GroupText, TextXAlignment = Enum.TextXAlignment.Left })
+		local cb = new("Frame", { Parent = panel, Position = px(6, 22), Size = px(10, 10), BackgroundColor3 = Theme.White, gradient(g.Check, 45), stroke(th.CheckBorder) })
+		segment(cb, 2, 5, 4, 7.5, 2, th.Check)
+		segment(cb, 3.5, 7.5, 8, 2.5, 2, th.Check)
+		new("Frame", { Parent = panel, Position = px(21, 25), Size = px(38, 4), BackgroundColor3 = th.Text, BackgroundTransparency = 0.25 })
+		new("Frame", { Parent = panel, Position = px(6, 40), Size = ud(1, -12, 0, 12), BackgroundColor3 = th.Field, stroke(th.FieldBorder) })
+		new("Frame", { Parent = panel, Position = px(6, 57), Size = ud(1, -12, 0, 7), BackgroundColor3 = th.Select })
+		new("Frame", { Parent = panel, Position = ud(1, -40, 1, -15), Size = px(34, 11), BackgroundColor3 = Theme.White, corner(2), gradient(g.Button), stroke(th.ButtonBorder) })
+
+		new("TextLabel", { Parent = card, Position = px(0, CARD_H + 5), Size = ud(1, 0, 0, 16), Text = name, FontFace = FONT_BOLD, TextSize = 12 })
+
+		connect(card.MouseButton1Click, function()
+			-- double-click a card to pick it straight away
+			if lastClickName == name and os.clock() - lastClickAt < 0.35 then confirm() return end
+			lastClickName, lastClickAt = name, os.clock()
+			selected = name
+			refreshSelection()
+		end)
+	end
+	refreshSelection()
+
+	local ok = xpButton(face, ud(1, -112, 1, -33), px(100, 23), "Continue")
+	connect(ok.MouseButton1Click, confirm)
+
+	if not finished then done.Event:Wait() end
+	done:Destroy()
+	gui:Destroy()
+	return selected
 end
 
 ------------------------------------------------------------------------
@@ -752,7 +1004,7 @@ function Library:CreateWindow(opt)
 	self._tip = new("TextLabel", {
 		Parent = overlay, Visible = false, BackgroundTransparency = 0, BackgroundColor3 = Theme.Tooltip,
 		AutomaticSize = Enum.AutomaticSize.XY, Size = px(0, 0), TextSize = 12, ZIndex = 20,
-		stroke(Theme.Black), pad(2, 5, 2, 5),
+		stroke(Theme.Outline), pad(2, 5, 2, 5),
 	})
 
 	self._notifs = new("Frame", {
@@ -794,18 +1046,18 @@ function Library:CreateWindow(opt)
 	end
 	new("TextLabel", {
 		Parent = titleBar, Position = px(29, 1), Size = ud(1, -110, 0, TITLE_H), Text = title, FontFace = FONT_BOLD,
-		TextSize = 14, TextColor3 = hex("0A1883"), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2,
+		TextSize = 14, TextColor3 = Theme.TitleShadow, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2,
 	})
 	new("TextLabel", {
 		Parent = titleBar, Position = px(28, 0), Size = ud(1, -110, 0, TITLE_H), Text = title, FontFace = FONT_BOLD,
-		TextSize = 14, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 3,
+		TextSize = 14, TextColor3 = Theme.TitleText, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 3,
 	})
 
 	local captionHovers = {}
 	local function captionButton(parent, xRight, isClose)
 		local b = new("TextButton", {
 			Parent = parent, Position = ud(1, xRight, 0, 5), Size = px(21, 21), BackgroundColor3 = Theme.White, BackgroundTransparency = 0, ZIndex = 4,
-			corner(3), stroke(Theme.White), gradient(isClose and G.CaptionClose or G.Caption, 45),
+			corner(3), stroke(Theme.CaptionEdge), gradient(isClose and G.CaptionClose or G.Caption, 45),
 		})
 		local shade = new("Frame", { Parent = b, Size = ud(1, 0, 1, 0), BackgroundColor3 = Theme.White, BackgroundTransparency = 1, corner(3) })
 		local glyph = new("Frame", { Parent = b, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), ZIndex = 2 })
@@ -818,34 +1070,34 @@ function Library:CreateWindow(opt)
 	end
 
 	local closeBtn, closeGlyph = captionButton(titleBar, -26, true)
-	segment(closeGlyph, 6, 6, 15, 15, 2, Theme.White, 2)
-	segment(closeGlyph, 15, 6, 6, 15, 2, Theme.White, 2)
+	segment(closeGlyph, 6, 6, 15, 15, 2, Theme.CloseGlyph, 2)
+	segment(closeGlyph, 15, 6, 6, 15, 2, Theme.CloseGlyph, 2)
 
 	local maxBtn, maxGlyph = captionButton(titleBar, -49)
 	local maxIcon = new("Frame", { Parent = maxGlyph, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0) })
-	box(maxIcon, px(5, 5), px(11, 3), Theme.White)
-	box(maxIcon, px(5, 5), px(1, 11), Theme.White)
-	box(maxIcon, px(15, 5), px(1, 11), Theme.White)
-	box(maxIcon, px(5, 15), px(11, 1), Theme.White)
+	box(maxIcon, px(5, 5), px(11, 3), Theme.Glyph)
+	box(maxIcon, px(5, 5), px(1, 11), Theme.Glyph)
+	box(maxIcon, px(15, 5), px(1, 11), Theme.Glyph)
+	box(maxIcon, px(5, 15), px(11, 1), Theme.Glyph)
 	local restoreIcon = new("Frame", { Parent = maxGlyph, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), Visible = false })
-	box(restoreIcon, px(7, 4), px(9, 2), Theme.White)
-	box(restoreIcon, px(15, 4), px(1, 8), Theme.White)
-	box(restoreIcon, px(7, 4), px(1, 4), Theme.White)
-	box(restoreIcon, px(12, 11), px(4, 1), Theme.White)
-	box(restoreIcon, px(4, 8), px(8, 2), Theme.White)
-	box(restoreIcon, px(4, 8), px(1, 8), Theme.White)
-	box(restoreIcon, px(11, 8), px(1, 8), Theme.White)
-	box(restoreIcon, px(4, 15), px(8, 1), Theme.White)
+	box(restoreIcon, px(7, 4), px(9, 2), Theme.Glyph)
+	box(restoreIcon, px(15, 4), px(1, 8), Theme.Glyph)
+	box(restoreIcon, px(7, 4), px(1, 4), Theme.Glyph)
+	box(restoreIcon, px(12, 11), px(4, 1), Theme.Glyph)
+	box(restoreIcon, px(4, 8), px(8, 2), Theme.Glyph)
+	box(restoreIcon, px(4, 8), px(1, 8), Theme.Glyph)
+	box(restoreIcon, px(11, 8), px(1, 8), Theme.Glyph)
+	box(restoreIcon, px(4, 15), px(8, 1), Theme.Glyph)
 
 	local minBtn, minGlyph = captionButton(titleBar, -72)
-	box(minGlyph, px(5, 13), px(7, 3), Theme.White)
+	box(minGlyph, px(5, 13), px(7, 3), Theme.Glyph)
 
 	--------------------------------------------------------------------
 	-- body: 3px blue frame around the beige face
 	--------------------------------------------------------------------
 	local body = new("Frame", { Parent = win, Name = "Body", BackgroundTransparency = 1, Position = px(0, TITLE_H), Size = ud(1, 0, 1, -TITLE_H) })
 	local face = new("Frame", { Parent = body, Name = "Face", Position = px(3, 0), Size = ud(1, -6, 1, -3), BackgroundColor3 = Theme.Face })
-	local leftCols, rightCols = { "0831D9", "166AEE", "0855DD" }, { "00138C", "001EA0", "003BDA" }
+	local leftCols, rightCols = Theme.FrameLeft, Theme.FrameRight
 	for i = 1, 3 do
 		box(body, ud(0, i - 1, 0, 0), ud(0, 1, 1, 0), hex(leftCols[i]))
 		box(body, ud(1, -i, 0, 0), ud(0, 1, 1, 0), hex(rightCols[i]))
@@ -861,13 +1113,13 @@ function Library:CreateWindow(opt)
 	local status = new("Frame", { Parent = face, Position = ud(0, 0, 1, -STATUS_H), Size = ud(1, 0, 0, STATUS_H), BackgroundColor3 = Theme.Face })
 	local statusText = new("TextLabel", { Parent = status, Position = px(6, 0), Size = ud(1, -150, 1, 0), Text = opt.Status or "Ready", TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left })
 	box(status, ud(1, -140, 0, 3), px(1, 16), Theme.Etch)
-	box(status, ud(1, -139, 0, 3), px(1, 16), Theme.White)
+	box(status, ud(1, -139, 0, 3), px(1, 16), Theme.Light)
 	local hintText = new("TextLabel", { Parent = status, Position = ud(1, -134, 0, 0), Size = px(116, STATUS_H), TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left })
 
 	local grip = new("TextButton", { Parent = status, AnchorPoint = Vector2.new(1, 1), Position = ud(1, -1, 1, -1), Size = px(13, 13), ZIndex = 3 })
 	for _, d in ipairs({ { 9, 1 }, { 5, 5 }, { 9, 5 }, { 1, 9 }, { 5, 9 }, { 9, 9 } }) do
-		box(grip, px(d[1] + 1, d[2] + 1), px(2, 2), Theme.White)
-		box(grip, px(d[1], d[2]), px(2, 2), hex("B9B6A6"))
+		box(grip, px(d[1] + 1, d[2] + 1), px(2, 2), Theme.Light)
+		box(grip, px(d[1], d[2]), px(2, 2), Theme.Grip)
 	end
 
 	function W:SetStatus(t) statusText.Text = t end
@@ -889,8 +1141,8 @@ function Library:CreateWindow(opt)
 	box(panel, ud(0, 0, 1, -1), ud(1, 0, 0, 1), Theme.PanelBorder)
 	box(panel, px(0, 0), ud(0, 1, 1, 0), Theme.PanelBorder)
 	box(panel, ud(1, -1, 0, 0), ud(0, 1, 1, 0), Theme.PanelBorder)
-	box(panel, ud(1, -2, 0, 1), ud(0, 1, 1, -2), hex("D6D3CE"))
-	box(panel, ud(0, 1, 1, -2), ud(1, -2, 0, 1), hex("D6D3CE"))
+	box(panel, ud(1, -2, 0, 1), ud(0, 1, 1, -2), Theme.PanelShadow)
+	box(panel, ud(0, 1, 1, -2), ud(1, -2, 0, 1), Theme.PanelShadow)
 	local pages = new("Frame", { Parent = panel, BackgroundTransparency = 1, Position = px(1, 1), Size = ud(1, -3, 1, -3) })
 
 	--------------------------------------------------------------------
@@ -899,7 +1151,7 @@ function Library:CreateWindow(opt)
 	local MINI_W = math.clamp(textWidth(title, 14, true) + 74, 170, 280)
 	local mini = new("Frame", {
 		Parent = root, Name = "Mini", Visible = false, Size = px(MINI_W, TITLE_H),
-		BackgroundColor3 = Theme.White, corner(8), stroke(hex("0831D9")), gradient(G.Title),
+		BackgroundColor3 = Theme.White, corner(8), stroke(Theme.FrameEdge), gradient(G.Title),
 	})
 	-- drag handle / click-to-open area (everything but the restore button)
 	local miniHit = new("TextButton", { Parent = mini, Size = ud(1, -30, 1, 0), ZIndex = 5 })
@@ -910,17 +1162,17 @@ function Library:CreateWindow(opt)
 	end
 	new("TextLabel", {
 		Parent = mini, Position = px(29, 1), Size = ud(1, -60, 1, 0), Text = title, FontFace = FONT_BOLD,
-		TextSize = 14, TextColor3 = hex("0A1883"), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2,
+		TextSize = 14, TextColor3 = Theme.TitleShadow, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2,
 	})
 	new("TextLabel", {
 		Parent = mini, Position = px(28, 0), Size = ud(1, -60, 1, 0), Text = title, FontFace = FONT_BOLD,
-		TextSize = 14, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 3,
+		TextSize = 14, TextColor3 = Theme.TitleText, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 3,
 	})
 	local miniBtn, miniGlyph = captionButton(mini, -26)
-	box(miniGlyph, px(5, 5), px(11, 3), Theme.White)
-	box(miniGlyph, px(5, 5), px(1, 11), Theme.White)
-	box(miniGlyph, px(15, 5), px(1, 11), Theme.White)
-	box(miniGlyph, px(5, 15), px(11, 1), Theme.White)
+	box(miniGlyph, px(5, 5), px(11, 3), Theme.Glyph)
+	box(miniGlyph, px(5, 5), px(1, 11), Theme.Glyph)
+	box(miniGlyph, px(15, 5), px(1, 11), Theme.Glyph)
+	box(miniGlyph, px(5, 15), px(11, 1), Theme.Glyph)
 
 	--------------------------------------------------------------------
 	-- window state: compact / maximize / hide
@@ -1110,7 +1362,7 @@ function Library:CreateWindow(opt)
 				Parent = page, BackgroundTransparency = 1,
 				Position = isLeft and px(0, 0) or ud(0.5, 0, 0, 0), Size = ud(0.5, 0, 1, 0),
 				CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y,
-				ScrollBarThickness = 4, ScrollBarImageColor3 = hex("A9B8D9"), VerticalScrollBarInset = Enum.ScrollBarInset.Always,
+				ScrollBarThickness = 4, ScrollBarImageColor3 = Theme.Scrollbar, VerticalScrollBarInset = Enum.ScrollBarInset.Always,
 				pad(14, isLeft and 6 or 12, 10, isLeft and 12 or 6), list(Enum.FillDirection.Vertical, 18),
 			})
 			connect(col:GetPropertyChangedSignal("CanvasPosition"), function() lib:_closePopups() end)
@@ -1218,7 +1470,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.6"
+local VERSION = "0.7"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -1240,6 +1492,35 @@ Library:OnUnload(function()
 end)
 
 local function cam() return workspace.CurrentCamera end
+
+-- theme: picked once on the first run and kept in its own file, since it has to be applied
+-- before the window is built (settings only load after the UI exists)
+local THEME_FILE = "xpware/theme.txt"
+local canWriteTheme = typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"
+
+local function readTheme()
+	if not canWriteTheme then return nil end
+	local ok, name = pcall(function() return isfile(THEME_FILE) and readfile(THEME_FILE) or nil end)
+	name = ok and type(name) == "string" and name:gsub("%s+", "") or nil
+	return (name and Library.Themes[name]) and name or nil
+end
+
+local function writeTheme(name)
+	if not canWriteTheme then return end
+	pcall(function()
+		if typeof(makefolder) == "function" and not (typeof(isfolder) == "function" and isfolder("xpware")) then
+			makefolder("xpware")
+		end
+		writefile(THEME_FILE, name)
+	end)
+end
+
+local themeName = readTheme()
+if not themeName then
+	themeName = Library:PickTheme({ Title = NAME .. " - Murder Mystery 2" })
+	writeTheme(themeName)
+end
+Library:SetTheme(themeName)
 
 -- window first: the ESP folder mounts next to Library.Gui, which only exists after this
 local Window = Library:CreateWindow({
@@ -1891,6 +2172,11 @@ Menu:AddKeybind("menu_key", {
 		end
 	end,
 })
+Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default = themeName, Callback = function(v)
+	if v == themeName then return end
+	writeTheme(v)
+	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
+end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer found", "This is what a role alert will look like once the features are in.", 5)
@@ -1921,6 +2207,7 @@ local canSave = typeof(writefile) == "function" and typeof(readfile) == "functio
 local NO_SAVE = {
 	tp_target = true, troll_target = true, safe_spot = true,
 	spectate = true, follow = true, orbit = true, fly = true, freeze = true,
+	theme = true, -- lives in theme.txt so it can be applied before the window exists
 }
 
 local function copyValue(v)

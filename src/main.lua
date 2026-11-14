@@ -31,7 +31,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.6"
+local VERSION = "0.7"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -53,6 +53,35 @@ Library:OnUnload(function()
 end)
 
 local function cam() return workspace.CurrentCamera end
+
+-- theme: picked once on the first run and kept in its own file, since it has to be applied
+-- before the window is built (settings only load after the UI exists)
+local THEME_FILE = "xpware/theme.txt"
+local canWriteTheme = typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"
+
+local function readTheme()
+	if not canWriteTheme then return nil end
+	local ok, name = pcall(function() return isfile(THEME_FILE) and readfile(THEME_FILE) or nil end)
+	name = ok and type(name) == "string" and name:gsub("%s+", "") or nil
+	return (name and Library.Themes[name]) and name or nil
+end
+
+local function writeTheme(name)
+	if not canWriteTheme then return end
+	pcall(function()
+		if typeof(makefolder) == "function" and not (typeof(isfolder) == "function" and isfolder("xpware")) then
+			makefolder("xpware")
+		end
+		writefile(THEME_FILE, name)
+	end)
+end
+
+local themeName = readTheme()
+if not themeName then
+	themeName = Library:PickTheme({ Title = NAME .. " - Murder Mystery 2" })
+	writeTheme(themeName)
+end
+Library:SetTheme(themeName)
 
 -- window first: the ESP folder mounts next to Library.Gui, which only exists after this
 local Window = Library:CreateWindow({
@@ -704,6 +733,11 @@ Menu:AddKeybind("menu_key", {
 		end
 	end,
 })
+Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default = themeName, Callback = function(v)
+	if v == themeName then return end
+	writeTheme(v)
+	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
+end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer found", "This is what a role alert will look like once the features are in.", 5)
@@ -734,6 +768,7 @@ local canSave = typeof(writefile) == "function" and typeof(readfile) == "functio
 local NO_SAVE = {
 	tp_target = true, troll_target = true, safe_spot = true,
 	spectate = true, follow = true, orbit = true, fly = true, freeze = true,
+	theme = true, -- lives in theme.txt so it can be applied before the window exists
 }
 
 local function copyValue(v)
