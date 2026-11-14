@@ -31,7 +31,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.5"
+local VERSION = "0.6"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -59,7 +59,6 @@ local Window = Library:CreateWindow({
 	Title = NAME .. " - Murder Mystery 2",
 	Size = Vector2.new(620, 460),
 	ToggleKey = Enum.KeyCode.RightShift,
-	Taskbar = true,
 	Status = "Ready",
 })
 
@@ -705,7 +704,6 @@ Menu:AddKeybind("menu_key", {
 		end
 	end,
 })
-Menu:AddToggle("show_taskbar", { Text = "Show Taskbar", Default = true, Callback = function(v) Library:SetTaskbar(v) end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer found", "This is what a role alert will look like once the features are in.", 5)
@@ -713,18 +711,115 @@ end })
 Menu:AddButton({ Text = "Unload", Callback = function() Library:Unload() end })
 
 local Config = Settings:AddGroup("Config", "Left")
-Config:AddButton({ Text = "Save Config", Callback = stub })
-Config:AddButton({ Text = "Load Config", Callback = stub })
-Config:AddToggle("autoload", { Text = "Load Config On Start", Callback = stub })
+local configLabel = Config:AddLabel("Settings save automatically.", { Color = Library.Theme.TextDim })
+local resetButton = Config:AddButton({ Text = "Reset To Defaults" })
 
 local About = Settings:AddGroup("About", "Right")
 About:AddLabel(NAME .. " v" .. VERSION, { Bold = true })
 About:AddLabel("Murder Mystery 2", { Color = Library.Theme.TextDim })
 About:AddDivider()
-About:AddLabel("The X button only minimizes. Use Turn Off in the Start menu to unload.")
+About:AddLabel("X and _ shrink the window into a small bar. Click the bar to open it again. Unload stops the script.")
 
 -- labels the role/farm features will drive later
 local _ = { murdererLabel, sheriffLabel, myRoleLabel, coinLabel }
+
+------------------------------------------------------------------------
+-- Settings persistence: every control saves to xpware/mm2.json when it changes and loads on start
+------------------------------------------------------------------------
+local CONFIG_DIR = "xpware"
+local CONFIG_FILE = CONFIG_DIR .. "/mm2.json"
+local canSave = typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"
+
+-- session-only state: restoring these would teleport you, lock onto an old target, or float you
+local NO_SAVE = {
+	tp_target = true, troll_target = true, safe_spot = true,
+	spectate = true, follow = true, orbit = true, fly = true, freeze = true,
+}
+
+local function copyValue(v)
+	if type(v) ~= "table" then return v end
+	local t = {}
+	for k, x in pairs(v) do t[k] = x end
+	return t
+end
+
+-- JSON can't hold EnumItems (keybinds), so they're stored as "Enum.KeyCode.E" strings
+local function encodeValue(v)
+	if typeof(v) == "EnumItem" then return { __enum = tostring(v) } end
+	return v
+end
+local function decodeValue(v)
+	if type(v) == "table" and type(v.__enum) == "string" then
+		local enumType, item = v.__enum:match("^Enum%.(%w+)%.(%w+)$")
+		local ok, res = pcall(function() return Enum[enumType][item] end)
+		return ok and res or nil
+	end
+	return v
+end
+
+local defaults = {}
+for flag in pairs(Options) do defaults[flag] = copyValue(Flags[flag]) end
+
+local applying = false -- true while loading/resetting, so those Sets don't each trigger a save
+
+local function saveSettings()
+	if not canSave then return end
+	local out = {}
+	for flag in pairs(Options) do
+		if not NO_SAVE[flag] and Flags[flag] ~= nil then out[flag] = encodeValue(Flags[flag]) end
+	end
+	pcall(function()
+		if typeof(makefolder) == "function" and not (typeof(isfolder) == "function" and isfolder(CONFIG_DIR)) then
+			makefolder(CONFIG_DIR)
+		end
+		writefile(CONFIG_FILE, HttpService:JSONEncode(out))
+	end)
+end
+
+local savePending = false
+local function queueSave()
+	if applying or savePending or not canSave then return end
+	savePending = true
+	task.delay(0.5, function()
+		savePending = false
+		saveSettings()
+	end)
+end
+
+local function applySettings(values)
+	applying = true
+	for flag, v in pairs(values) do
+		local opt = Options[flag]
+		if opt and opt.Set and not NO_SAVE[flag] then pcall(opt.Set, opt, decodeValue(v)) end
+	end
+	applying = false
+end
+
+if canSave then
+	local ok, data = pcall(function()
+		if not isfile(CONFIG_FILE) then return nil end
+		return HttpService:JSONDecode(readfile(CONFIG_FILE))
+	end)
+	if ok and type(data) == "table" then
+		applySettings(data)
+	elseif not ok then
+		configLabel:Set("Saved settings were unreadable, starting from defaults.")
+	end
+	for flag, opt in pairs(Options) do
+		if not NO_SAVE[flag] and opt.OnChanged then opt:OnChanged(queueSave) end
+	end
+	onUnload(function() if savePending then saveSettings() end end)
+else
+	configLabel:Set("Your executor can't write files, so settings won't be saved.")
+end
+
+on(resetButton.Instance.MouseButton1Click, function()
+	local values = {}
+	for flag, v in pairs(defaults) do values[flag] = copyValue(v) end
+	applySettings(values)
+	saveSettings()
+	notify("Settings reset to defaults.")
+end)
 
 ------------------------------------------------------------------------
 -- Runtime

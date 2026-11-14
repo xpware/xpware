@@ -63,7 +63,6 @@ local Theme = {
 	White        = hex("FFFFFF"),
 	Black        = hex("000000"),
 	Etch         = hex("ACA899"),
-	StartBlue    = hex("0A246A"),
 }
 Library.Theme = Theme
 
@@ -81,18 +80,10 @@ local G = {
 	Thumb        = {{0,"FFFFFF"},{1,"E2E1D9"}},
 	ComboBtn     = {{0,"E6EEFC"},{0.5,"C6D6F7"},{1,"B1C7F5"}},
 	ComboHover   = {{0,"FDFFFF"},{0.5,"DDE8FE"},{1,"C3D6FD"}},
-	Taskbar      = {{0,"1F2F86"},{0.03,"3165C4"},{0.06,"3682E5"},{0.10,"4490E6"},{0.12,"3883E5"},{0.15,"2B71E0"},{0.18,"2663DA"},{0.20,"235BD6"},{0.23,"2258D5"},{0.38,"2157D6"},{0.54,"245DDB"},{0.86,"2562DF"},{0.89,"245FDC"},{0.92,"2158D4"},{0.95,"1D4EC0"},{1,"1941A5"}},
-	Tray         = {{0,"0C59B9"},{0.06,"139EE9"},{0.10,"18B5F2"},{0.14,"139BEB"},{0.19,"1290E8"},{0.63,"0D8DEA"},{0.81,"0D9FF1"},{0.88,"0F9EED"},{0.91,"119BE9"},{0.94,"1392E2"},{0.97,"137ED7"},{1,"095BC9"}},
-	Start        = {{0,"3C9D3C"},{0.08,"6FC46A"},{0.18,"52B24F"},{0.5,"3A9C3A"},{0.85,"2E8A2E"},{1,"236F23"}},
-	TaskBtn      = {{0,"6AA4FA"},{0.1,"4A8BF5"},{0.9,"3C81F3"},{1,"2E6BDA"}},
-	TaskBtnOn    = {{0,"1641A0"},{0.15,"1E52B7"},{1,"2558C0"}},
-	StartHeader  = {{0,"1868CE"},{0.12,"0E60CB"},{0.20,"0E60CB"},{0.32,"1164CF"},{0.47,"1B6CD3"},{0.54,"1E70D9"},{0.60,"2476DC"},{0.65,"297AE0"},{0.77,"3482E3"},{0.90,"428EE9"},{1,"4791EB"}},
-	StartFooter  = {{0,"4282D6"},{0.1,"3B85E0"},{0.5,"3C87E2"},{0.9,"1D5ECF"},{1,"1651C4"}},
 }
 
 local FONT        = Font.fromEnum(Enum.Font.Arial)
 local FONT_BOLD   = Font.new(FONT.Family, Enum.FontWeight.Bold)
-local FONT_START  = Font.new(FONT.Family, Enum.FontWeight.Bold, Enum.FontStyle.Italic)
 
 ------------------------------------------------------------------------
 -- Helpers
@@ -210,7 +201,7 @@ local function keyName(k)
 	return k.Name
 end
 
--- four-pane logo used for the title icon, start button and tray
+-- four-pane logo used for the title bar and the compact bar
 local function logo(parent, x, y, s, z)
 	local holder = new("Frame", { Parent = parent, BackgroundTransparency = 1, Position = px(x, y), Size = px(s, s), ZIndex = z or 1 })
 	local h = math.floor((s - 1) / 2)
@@ -260,7 +251,7 @@ local function xpButton(parent, pos, size, text)
 end
 
 ------------------------------------------------------------------------
--- Popups (dropdown lists, start menu): one open at a time, click outside closes
+-- Popups (dropdown lists): one open at a time, click outside closes
 ------------------------------------------------------------------------
 function Library:_openPopup(p)
 	for _, other in ipairs(self._popups) do
@@ -746,8 +737,6 @@ function Library:CreateWindow(opt)
 	local MIN_W, MIN_H = 460, 320
 	local tabsWidth = 0
 	if opt.ToggleKey then self.ToggleKey = opt.ToggleKey end
-	local useTaskbar = opt.Taskbar ~= false
-	local TASK_H = 30
 
 	local gui = new("ScreenGui", {
 		Name = HttpService:GenerateGUID(false):sub(1, 8), ResetOnSpawn = false, IgnoreGuiInset = true,
@@ -768,7 +757,7 @@ function Library:CreateWindow(opt)
 
 	self._notifs = new("Frame", {
 		Parent = overlay, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 1),
-		Position = ud(1, -6, 1, -(useTaskbar and TASK_H or 0) - 2), Size = px(264, 600), ZIndex = 10,
+		Position = ud(1, -6, 1, -6), Size = px(264, 600), ZIndex = 10,
 		new("UIListLayout", {
 			Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder,
 			VerticalAlignment = Enum.VerticalAlignment.Bottom, HorizontalAlignment = Enum.HorizontalAlignment.Right,
@@ -813,9 +802,9 @@ function Library:CreateWindow(opt)
 	})
 
 	local captionHovers = {}
-	local function captionButton(xRight, isClose)
+	local function captionButton(parent, xRight, isClose)
 		local b = new("TextButton", {
-			Parent = titleBar, Position = ud(1, xRight, 0, 5), Size = px(21, 21), BackgroundColor3 = Theme.White, BackgroundTransparency = 0, ZIndex = 4,
+			Parent = parent, Position = ud(1, xRight, 0, 5), Size = px(21, 21), BackgroundColor3 = Theme.White, BackgroundTransparency = 0, ZIndex = 4,
 			corner(3), stroke(Theme.White), gradient(isClose and G.CaptionClose or G.Caption, 45),
 		})
 		local shade = new("Frame", { Parent = b, Size = ud(1, 0, 1, 0), BackgroundColor3 = Theme.White, BackgroundTransparency = 1, corner(3) })
@@ -828,11 +817,11 @@ function Library:CreateWindow(opt)
 		return b, glyph
 	end
 
-	local closeBtn, closeGlyph = captionButton(-26, true)
+	local closeBtn, closeGlyph = captionButton(titleBar, -26, true)
 	segment(closeGlyph, 6, 6, 15, 15, 2, Theme.White, 2)
 	segment(closeGlyph, 15, 6, 6, 15, 2, Theme.White, 2)
 
-	local maxBtn, maxGlyph = captionButton(-49)
+	local maxBtn, maxGlyph = captionButton(titleBar, -49)
 	local maxIcon = new("Frame", { Parent = maxGlyph, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0) })
 	box(maxIcon, px(5, 5), px(11, 3), Theme.White)
 	box(maxIcon, px(5, 5), px(1, 11), Theme.White)
@@ -848,7 +837,7 @@ function Library:CreateWindow(opt)
 	box(restoreIcon, px(11, 8), px(1, 8), Theme.White)
 	box(restoreIcon, px(4, 15), px(8, 1), Theme.White)
 
-	local minBtn, minGlyph = captionButton(-72)
+	local minBtn, minGlyph = captionButton(titleBar, -72)
 	box(minGlyph, px(5, 13), px(7, 3), Theme.White)
 
 	--------------------------------------------------------------------
@@ -905,139 +894,73 @@ function Library:CreateWindow(opt)
 	local pages = new("Frame", { Parent = panel, BackgroundTransparency = 1, Position = px(1, 1), Size = ud(1, -3, 1, -3) })
 
 	--------------------------------------------------------------------
-	-- taskbar
+	-- compact bar: X and minimize shrink the window into this
 	--------------------------------------------------------------------
-	local taskbar = new("Frame", {
-		Parent = root, Name = "Taskbar", Position = ud(0, 0, 1, -TASK_H), Size = ud(1, 0, 0, TASK_H),
-		BackgroundColor3 = Theme.White, Visible = useTaskbar, ZIndex = 5, gradient(G.Taskbar),
+	local MINI_W = math.clamp(textWidth(title, 14, true) + 74, 170, 280)
+	local mini = new("Frame", {
+		Parent = root, Name = "Mini", Visible = false, Size = px(MINI_W, TITLE_H),
+		BackgroundColor3 = Theme.White, corner(8), stroke(hex("0831D9")), gradient(G.Title),
 	})
-
-	local startBtn = new("TextButton", { Parent = taskbar, Size = px(102, TASK_H), BackgroundColor3 = Theme.White, BackgroundTransparency = 0, corner(12), gradient(G.Start) })
-	new("Frame", { Parent = startBtn, Size = px(14, TASK_H), BackgroundColor3 = Theme.White, gradient(G.Start) })
-	logo(startBtn, 10, 7, 17, 2)
-	new("TextLabel", { Parent = startBtn, Position = px(34, 1), Size = ud(1, -36, 1, 0), Text = "start", FontFace = FONT_START, TextSize = 19, TextColor3 = hex("1A4A1A"), TextTransparency = 0.4, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 2 })
-	new("TextLabel", { Parent = startBtn, Position = px(33, 0), Size = ud(1, -36, 1, 0), Text = "start", FontFace = FONT_START, TextSize = 19, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3 })
-	local startShade = new("Frame", { Parent = startBtn, Size = ud(1, 0, 1, 0), BackgroundTransparency = 1, BackgroundColor3 = Theme.White, ZIndex = 4, corner(12) })
-
-	local taskBtn = new("TextButton", { Parent = taskbar, Position = px(110, 3), Size = px(176, 24), BackgroundColor3 = Theme.White, BackgroundTransparency = 0, corner(3), stroke(hex("1B4CBD")) })
-	local taskGrad = gradient(G.TaskBtnOn); taskGrad.Parent = taskBtn
-	logo(taskBtn, 7, 5, 14, 2)
-	new("TextLabel", { Parent = taskBtn, Position = px(27, 0), Size = ud(1, -32, 1, 0), Text = title, TextSize = 12, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2 })
-
-	local tray = new("Frame", { Parent = taskbar, AnchorPoint = Vector2.new(1, 0), Position = ud(1, 0, 0, 0), Size = px(98, TASK_H), BackgroundColor3 = Theme.White, gradient(G.Tray) })
-	box(tray, px(0, 0), ud(0, 1, 1, 0), hex("1042AF"))
-	box(tray, px(1, 0), ud(0, 1, 1, 0), hex("18BBFF"))
-	local trayIcon = new("TextButton", { Parent = tray, Position = px(8, 7), Size = px(16, 16) })
-	logo(trayIcon, 1, 1, 14)
-	local clock = new("TextLabel", { Parent = tray, Position = px(28, 0), Size = ud(1, -34, 1, 0), TextSize = 12, TextColor3 = Theme.White })
-	task.spawn(function()
-		while gui.Parent do
-			local t = os.date("*t")
-			local h = t.hour % 12
-			if h == 0 then h = 12 end
-			clock.Text = string.format("%d:%02d %s", h, t.min, t.hour < 12 and "AM" or "PM")
-			task.wait(5)
-		end
-	end)
-
-	--------------------------------------------------------------------
-	-- start menu
-	--------------------------------------------------------------------
-	local SM_W, SM_H = 300, 360
-	local sm = new("Frame", {
-		Parent = overlay, Name = "StartMenu", Visible = false, AnchorPoint = Vector2.new(0, 1),
-		Position = ud(0, 0, 1, -(useTaskbar and TASK_H or 0)), Size = px(SM_W, SM_H), BackgroundColor3 = hex("1868CE"),
-		corner(8), stroke(hex("0B3FA8")),
+	-- drag handle / click-to-open area (everything but the restore button)
+	local miniHit = new("TextButton", { Parent = mini, Size = ud(1, -30, 1, 0), ZIndex = 5 })
+	if opt.Icon then
+		new("ImageLabel", { Parent = mini, Position = px(7, 7), Size = px(16, 16), BackgroundTransparency = 1, Image = opt.Icon, ZIndex = 2 })
+	else
+		logo(mini, 7, 7, 16, 2)
+	end
+	new("TextLabel", {
+		Parent = mini, Position = px(29, 1), Size = ud(1, -60, 1, 0), Text = title, FontFace = FONT_BOLD,
+		TextSize = 14, TextColor3 = hex("0A1883"), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2,
 	})
-	-- 8px taller than shown so the body covers its rounded bottom corners
-	local header = new("Frame", { Parent = sm, Size = ud(1, 0, 0, 66), BackgroundColor3 = Theme.White, corner(8), gradient(scaled(G.StartHeader, 58 / 66)) })
-	local avatar = new("Frame", { Parent = header, Position = px(8, 7), Size = px(44, 44), BackgroundColor3 = hex("D8E4F8"), corner(4), stroke(Theme.White, 2) })
-	local avatarImg = new("ImageLabel", { Parent = avatar, Size = ud(1, 0, 1, 0), BackgroundTransparency = 1, corner(4) })
-	local lp = Players.LocalPlayer
-	local userName = lp and lp.DisplayName or "xpware"
-	new("TextLabel", { Parent = header, Position = px(63, 1), Size = ud(1, -68, 1, 0), Text = userName, FontFace = FONT_BOLD, TextSize = 15, TextColor3 = hex("0A2A6E"), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd })
-	new("TextLabel", { Parent = header, Position = px(62, 0), Size = ud(1, -68, 1, 0), Text = userName, FontFace = FONT_BOLD, TextSize = 15, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2 })
-	if lp then
-		task.spawn(function()
-			local ok, img = pcall(function()
-				return Players:GetUserThumbnailAsync(lp.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
-			end)
-			if ok and avatarImg.Parent then avatarImg.Image = img end
-		end)
-	end
-	new("Frame", {
-		Parent = sm, Position = px(0, 56), Size = ud(1, 0, 0, 2), BackgroundColor3 = hex("DA884A"), ZIndex = 3,
-		new("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(1, 1) }) }),
+	new("TextLabel", {
+		Parent = mini, Position = px(28, 0), Size = ud(1, -60, 1, 0), Text = title, FontFace = FONT_BOLD,
+		TextSize = 14, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 3,
 	})
-
-	local smBody = new("Frame", { Parent = sm, Position = px(0, 58), Size = ud(1, 0, 1, -98), BackgroundColor3 = Theme.White })
-	local smLeft = new("Frame", { Parent = smBody, Size = ud(0.56, 0, 1, 0), BackgroundColor3 = Theme.White, pad(6, 0, 6, 0), list() })
-	local smRight = new("Frame", { Parent = smBody, Position = ud(0.56, 0, 0, 0), Size = ud(0.44, 0, 1, 0), BackgroundColor3 = hex("D3E5FA"), pad(6, 0, 6, 0), list() })
-	box(smBody, ud(0.56, 0, 0, 0), ud(0, 1, 1, 0), hex("95BDEE"))
-
-	local footer = new("Frame", { Parent = sm, Position = ud(0, 0, 1, -40), Size = ud(1, 0, 0, 40), BackgroundColor3 = Theme.White, gradient(G.StartFooter) })
-
-	local smHover, startHover = hoverable(sm), hoverable(startBtn)
-	local smPopup = {
-		close = function() sm.Visible = false; startShade.BackgroundTransparency = 1 end,
-		hovered = function() return smHover.hovered or startHover.hovered end,
-	}
-
-	local palette = { "3C81F3", "E8A33D", "4CAF50", "D9534F", "8E6CC9", "2AA5B5" }
-	local smCount = 0
-	local function smItem(parent, text, color, iconSize, textColor, bold, onClick)
-		smCount += 1
-		local it = new("TextButton", { Parent = parent, Size = ud(1, 0, 0, iconSize + 8), LayoutOrder = smCount, BackgroundColor3 = Theme.Select, BackgroundTransparency = 1 })
-		local ic = new("Frame", { Parent = it, Position = px(6, 4), Size = px(iconSize, iconSize), BackgroundColor3 = hex(color), corner(3) })
-		new("TextLabel", { Parent = ic, Size = ud(1, 0, 1, 0), Text = text:sub(1, 1):upper(), FontFace = FONT_BOLD, TextSize = iconSize > 18 and 13 or 11, TextColor3 = Theme.White })
-		local lbl = new("TextLabel", { Parent = it, Position = px(iconSize + 13, 0), Size = ud(1, -(iconSize + 16), 1, 0), Text = text, TextSize = 12, TextColor3 = textColor, FontFace = bold and FONT_BOLD or FONT, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd })
-		connect(it.MouseEnter, function() it.BackgroundTransparency = 0; lbl.TextColor3 = Theme.White end)
-		connect(it.MouseLeave, function() it.BackgroundTransparency = 1; lbl.TextColor3 = textColor end)
-		connect(it.MouseButton1Click, function()
-			lib:_closePopups()
-			onClick()
-		end)
-		return it
-	end
-
-	local function footerButton(xRight, text, color, drawIcon, onClick)
-		local b = new("TextButton", { Parent = footer, Position = ud(1, xRight, 0, 9), Size = px(80, 22), BackgroundColor3 = Theme.White, BackgroundTransparency = 1, corner(3) })
-		local ic = new("Frame", { Parent = b, Size = px(22, 22), BackgroundColor3 = hex(color), corner(4), stroke(Theme.White) })
-		drawIcon(ic)
-		new("TextLabel", { Parent = b, Position = px(27, 0), Size = ud(1, -27, 1, 0), Text = text, TextSize = 12, TextColor3 = Theme.White, TextXAlignment = Enum.TextXAlignment.Left })
-		connect(b.MouseEnter, function() b.BackgroundTransparency = 0.85 end)
-		connect(b.MouseLeave, function() b.BackgroundTransparency = 1 end)
-		connect(b.MouseButton1Click, function()
-			lib:_closePopups()
-			onClick()
-		end)
-	end
+	local miniBtn, miniGlyph = captionButton(mini, -26)
+	box(miniGlyph, px(5, 5), px(11, 3), Theme.White)
+	box(miniGlyph, px(5, 5), px(1, 11), Theme.White)
+	box(miniGlyph, px(15, 5), px(1, 11), Theme.White)
+	box(miniGlyph, px(5, 15), px(11, 1), Theme.White)
 
 	--------------------------------------------------------------------
-	-- window state: minimize / maximize / hide
+	-- window state: compact / maximize / hide
 	--------------------------------------------------------------------
 	local minimized, maximized = false, false
 	local normalPos, normalSize
 
-	local function refresh()
-		win.Visible = lib.Toggled and not minimized
-		taskbar.Visible = lib.Toggled and useTaskbar
-		taskGrad.Color = seq(win.Visible and G.TaskBtnOn or G.TaskBtn)
-		lib._notifs.Position = ud(1, -6, 1, -(taskbar.Visible and TASK_H or 0) - 2)
-		sm.Position = ud(0, 0, 1, -(taskbar.Visible and TASK_H or 0))
+	local function relPos(gui)
+		local rel = gui.AbsolutePosition - root.AbsolutePosition
+		return px(rel.X, rel.Y)
 	end
 
-	function W:Minimize() minimized = true; lib:_closePopups(); refresh() end
-	function W:Restore() minimized = false; refresh() end
+	local function refresh()
+		win.Visible = lib.Toggled and not minimized
+		mini.Visible = lib.Toggled and minimized
+	end
+
+	-- the bar takes the window's place, and the window comes back wherever the bar was left
+	function W:Minimize()
+		if minimized then return end
+		lib:_closePopups()
+		if lib._tip then lib._tip.Visible = false end
+		mini.Position = relPos(win)
+		minimized = true
+		refresh()
+	end
+	function W:Restore()
+		if not minimized then return end
+		if not maximized then win.Position = relPos(mini) end
+		minimized = false
+		refresh()
+	end
 	function W:ToggleMaximize()
 		if maximized then
 			win.Position, win.Size = normalPos, normalSize
 			maximized = false
 		else
 			normalPos, normalSize = win.Position, win.Size
-			local s = root.AbsoluteSize
 			win.Position = px(0, 0)
-			win.Size = px(s.X, s.Y - (taskbar.Visible and TASK_H or 0))
+			win.Size = px(root.AbsoluteSize.X, root.AbsoluteSize.Y)
 			maximized = true
 		end
 		maxIcon.Visible = not maximized
@@ -1052,73 +975,32 @@ function Library:CreateWindow(opt)
 		refresh()
 	end
 
-	function lib:SetTaskbar(on)
-		useTaskbar = on and true or false
-		if not useTaskbar and minimized then minimized = false end
-		refresh()
-	end
-
 	local warnedClose = false
 	connect(closeBtn.MouseButton1Click, function()
 		W:Minimize()
 		if not warnedClose then
 			warnedClose = true
-			lib:Notify(title, "Still running. Click the taskbar button to bring it back, or use Turn Off in the Start menu to unload.", 6)
+			lib:Notify(title, "Still running. Click the bar to open it again, or use Unload to stop it.", 6)
 		end
 	end)
 	connect(minBtn.MouseButton1Click, function() W:Minimize() end)
 	connect(maxBtn.MouseButton1Click, function() W:ToggleMaximize() end)
-	connect(taskBtn.MouseButton1Click, function()
-		if win.Visible then W:Minimize() else W:Restore() end
-	end)
-	connect(trayIcon.MouseButton1Click, function()
-		if win.Visible then W:Minimize() else W:Restore() end
-	end)
-	connect(startBtn.MouseButton1Click, function()
-		if sm.Visible then
-			lib:_closePopups()
-		else
-			sm.Visible = true
-			startShade.BackgroundColor3 = Theme.Black
-			startShade.BackgroundTransparency = 0.8
-			lib:_openPopup(smPopup)
-		end
-	end)
-	connect(startBtn.MouseEnter, function()
-		if not sm.Visible then startShade.BackgroundColor3 = Theme.White; startShade.BackgroundTransparency = 0.85 end
-	end)
-	connect(startBtn.MouseLeave, function()
-		if not sm.Visible then startShade.BackgroundTransparency = 1 end
-	end)
-
-	-- right column + footer of the start menu
-	smItem(smRight, "Control Panel", "6E8FC9", 16, Theme.StartBlue, true, function()
-		for _, t in ipairs(W.Tabs) do
-			if t.Name:lower():find("setting") then W:Restore(); t:Select(); return end
-		end
-	end)
-	smItem(smRight, "Help and Support", "2AA5B5", 16, Theme.StartBlue, true, function()
-		lib:Notify("Help", keyName(lib.ToggleKey) .. " hides everything. The X button only minimizes. Turn Off unloads the script.", 7)
-	end)
-	smItem(smRight, "Hide Window", "8A8A8A", 16, Theme.StartBlue, true, function() W:Minimize() end)
-
-	footerButton(-172, "Log Off", "E9A23B", function(ic)
-		segment(ic, 5, 11, 15, 11, 2, Theme.White)
-		segment(ic, 12, 7, 16, 11, 2, Theme.White)
-		segment(ic, 12, 15, 16, 11, 2, Theme.White)
-	end, function() lib:Toggle(false) end)
-	footerButton(-88, "Turn Off", "D9442B", function(ic)
-		new("Frame", { Parent = ic, Position = px(5, 6), Size = px(12, 12), BackgroundTransparency = 1, corner(6), stroke(Theme.White, 2) })
-		box(ic, px(8, 2), px(6, 6), hex("D9442B"))
-		box(ic, px(10, 3), px(2, 8), Theme.White)
-	end, function() lib:Unload() end)
+	connect(miniBtn.MouseButton1Click, function() W:Restore() end)
 
 	--------------------------------------------------------------------
 	-- dragging + resizing
 	--------------------------------------------------------------------
 	local dragging, resizing = false, false
+	local miniDrag, miniMoved = false, false
 	local dragStart, startPos, startSize
 	local lastClick = 0
+
+	-- the compact bar: drag it around, or click without dragging to open the window
+	connect(miniHit.InputBegan, function(input)
+		if not isPress(input) then return end
+		miniDrag, miniMoved = true, false
+		dragStart, startPos = input.Position, relPos(mini)
+	end)
 
 	connect(titleBar.InputBegan, function(input)
 		if not isPress(input) then return end
@@ -1156,10 +1038,22 @@ function Library:CreateWindow(opt)
 		elseif resizing then
 			local d = input.Position - dragStart
 			win.Size = px(math.max(MIN_W, startSize.X + d.X), math.max(MIN_H, startSize.Y + d.Y))
+		elseif miniDrag then
+			local d = input.Position - dragStart
+			if d.Magnitude > 4 then miniMoved = true end
+			if miniMoved then
+				local s = root.AbsoluteSize
+				local topInset = GuiService:GetGuiInset().Y
+				local x = math.clamp(startPos.X.Offset + d.X, 0, math.max(0, s.X - mini.AbsoluteSize.X))
+				local y = math.clamp(startPos.Y.Offset + d.Y, topInset, math.max(topInset, s.Y - TITLE_H))
+				mini.Position = px(x, y)
+			end
 		end
 	end)
 	connect(UIS.InputEnded, function(input)
-		if isPress(input) then dragging, resizing = false, false end
+		if not isPress(input) then return end
+		if miniDrag and not miniMoved then W:Restore() end
+		dragging, resizing, miniDrag = false, false, false
 	end)
 
 	-- click-outside closes popups, toggle key hides everything
@@ -1266,12 +1160,6 @@ function Library:CreateWindow(opt)
 		end
 
 		table.insert(W.Tabs, tab)
-		-- grow the start menu so every tab fits (header 58 + footer 40 + padding 12, 30px per item)
-		sm.Size = px(SM_W, math.max(SM_H, 110 + #W.Tabs * 30))
-		smItem(smLeft, name, palette[(index - 1) % #palette + 1], 22, Theme.Text, false, function()
-			W:Restore()
-			tab:Select()
-		end)
 		if index == 1 then tab:Select() end
 		return tab
 	end
@@ -1330,7 +1218,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.5"
+local VERSION = "0.6"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -1358,7 +1246,6 @@ local Window = Library:CreateWindow({
 	Title = NAME .. " - Murder Mystery 2",
 	Size = Vector2.new(620, 460),
 	ToggleKey = Enum.KeyCode.RightShift,
-	Taskbar = true,
 	Status = "Ready",
 })
 
@@ -2004,7 +1891,6 @@ Menu:AddKeybind("menu_key", {
 		end
 	end,
 })
-Menu:AddToggle("show_taskbar", { Text = "Show Taskbar", Default = true, Callback = function(v) Library:SetTaskbar(v) end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer found", "This is what a role alert will look like once the features are in.", 5)
@@ -2012,18 +1898,115 @@ end })
 Menu:AddButton({ Text = "Unload", Callback = function() Library:Unload() end })
 
 local Config = Settings:AddGroup("Config", "Left")
-Config:AddButton({ Text = "Save Config", Callback = stub })
-Config:AddButton({ Text = "Load Config", Callback = stub })
-Config:AddToggle("autoload", { Text = "Load Config On Start", Callback = stub })
+local configLabel = Config:AddLabel("Settings save automatically.", { Color = Library.Theme.TextDim })
+local resetButton = Config:AddButton({ Text = "Reset To Defaults" })
 
 local About = Settings:AddGroup("About", "Right")
 About:AddLabel(NAME .. " v" .. VERSION, { Bold = true })
 About:AddLabel("Murder Mystery 2", { Color = Library.Theme.TextDim })
 About:AddDivider()
-About:AddLabel("The X button only minimizes. Use Turn Off in the Start menu to unload.")
+About:AddLabel("X and _ shrink the window into a small bar. Click the bar to open it again. Unload stops the script.")
 
 -- labels the role/farm features will drive later
 local _ = { murdererLabel, sheriffLabel, myRoleLabel, coinLabel }
+
+------------------------------------------------------------------------
+-- Settings persistence: every control saves to xpware/mm2.json when it changes and loads on start
+------------------------------------------------------------------------
+local CONFIG_DIR = "xpware"
+local CONFIG_FILE = CONFIG_DIR .. "/mm2.json"
+local canSave = typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"
+
+-- session-only state: restoring these would teleport you, lock onto an old target, or float you
+local NO_SAVE = {
+	tp_target = true, troll_target = true, safe_spot = true,
+	spectate = true, follow = true, orbit = true, fly = true, freeze = true,
+}
+
+local function copyValue(v)
+	if type(v) ~= "table" then return v end
+	local t = {}
+	for k, x in pairs(v) do t[k] = x end
+	return t
+end
+
+-- JSON can't hold EnumItems (keybinds), so they're stored as "Enum.KeyCode.E" strings
+local function encodeValue(v)
+	if typeof(v) == "EnumItem" then return { __enum = tostring(v) } end
+	return v
+end
+local function decodeValue(v)
+	if type(v) == "table" and type(v.__enum) == "string" then
+		local enumType, item = v.__enum:match("^Enum%.(%w+)%.(%w+)$")
+		local ok, res = pcall(function() return Enum[enumType][item] end)
+		return ok and res or nil
+	end
+	return v
+end
+
+local defaults = {}
+for flag in pairs(Options) do defaults[flag] = copyValue(Flags[flag]) end
+
+local applying = false -- true while loading/resetting, so those Sets don't each trigger a save
+
+local function saveSettings()
+	if not canSave then return end
+	local out = {}
+	for flag in pairs(Options) do
+		if not NO_SAVE[flag] and Flags[flag] ~= nil then out[flag] = encodeValue(Flags[flag]) end
+	end
+	pcall(function()
+		if typeof(makefolder) == "function" and not (typeof(isfolder) == "function" and isfolder(CONFIG_DIR)) then
+			makefolder(CONFIG_DIR)
+		end
+		writefile(CONFIG_FILE, HttpService:JSONEncode(out))
+	end)
+end
+
+local savePending = false
+local function queueSave()
+	if applying or savePending or not canSave then return end
+	savePending = true
+	task.delay(0.5, function()
+		savePending = false
+		saveSettings()
+	end)
+end
+
+local function applySettings(values)
+	applying = true
+	for flag, v in pairs(values) do
+		local opt = Options[flag]
+		if opt and opt.Set and not NO_SAVE[flag] then pcall(opt.Set, opt, decodeValue(v)) end
+	end
+	applying = false
+end
+
+if canSave then
+	local ok, data = pcall(function()
+		if not isfile(CONFIG_FILE) then return nil end
+		return HttpService:JSONDecode(readfile(CONFIG_FILE))
+	end)
+	if ok and type(data) == "table" then
+		applySettings(data)
+	elseif not ok then
+		configLabel:Set("Saved settings were unreadable, starting from defaults.")
+	end
+	for flag, opt in pairs(Options) do
+		if not NO_SAVE[flag] and opt.OnChanged then opt:OnChanged(queueSave) end
+	end
+	onUnload(function() if savePending then saveSettings() end end)
+else
+	configLabel:Set("Your executor can't write files, so settings won't be saved.")
+end
+
+on(resetButton.Instance.MouseButton1Click, function()
+	local values = {}
+	for flag, v in pairs(defaults) do values[flag] = copyValue(v) end
+	applySettings(values)
+	saveSettings()
+	notify("Settings reset to defaults.")
+end)
 
 ------------------------------------------------------------------------
 -- Runtime
