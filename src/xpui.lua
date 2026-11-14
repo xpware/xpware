@@ -66,7 +66,7 @@ local Theme = {
 	Light        = hex("FFFFFF"),  -- bevel highlight lines
 	Outline      = hex("000000"),  -- tooltip / list / balloon borders
 	SelectText   = hex("FFFFFF"),
-	ButtonText   = hex("000000"),  -- push buttons stay light in every theme, so their text stays dark
+	ButtonText   = hex("000000"),
 	Glyph        = hex("FFFFFF"),  -- caption button icons
 	CloseGlyph   = hex("FFFFFF"),
 	CaptionEdge  = hex("FFFFFF"),
@@ -122,7 +122,7 @@ Library.Themes = {
 		Theme = {
 			Face = "2B2F36", Panel = "23262C", PanelMid = "212429", PanelBorder = "4A505A", PanelShadow = "2A2E35",
 			Text = "E6E8EB", TextDim = "8A919C", GroupBorder = "3D434C", GroupText = "7FB2FF",
-			Field = "1B1E23", FieldBorder = "4E5866", ButtonBorder = "0E1013", ButtonText = "1B1E23", CheckBorder = "5A6472", Check = "5BD16B",
+			Field = "1B1E23", FieldBorder = "4E5866", ButtonBorder = "15181D", ButtonText = "FFFFFF", CheckBorder = "5A6472", Check = "5BD16B",
 			TabTop = "4C8DF6", TabTopLight = "8AB6FF", Select = "3D6FD1", SelectText = "FFFFFF", Tooltip = "30343B",
 			Light = "3A3F47", Outline = "0E1013", Etch = "454B54",
 			Track = "1A1D22", TrackShadow = "0F1114", Tick = "4A505A", ThumbBorder = "6B7586",
@@ -135,9 +135,8 @@ Library.Themes = {
 			Title        = {{0,"4A5568"},{0.08,"2D3748"},{0.40,"262F3D"},{0.88,"2B3545"},{0.93,"2B3545"},{0.95,"222A36"},{0.96,"1A202A"},{1,"1A202A"}},
 			Caption      = {{0,"6B7A90"},{0.12,"4E5B70"},{0.5,"3A4558"},{1,"2C3545"}},
 			CaptionClose = {{0,"E89A8A"},{0.12,"D06A55"},{0.5,"B5432C"},{1,"8E2A16"}},
-			-- light buttons: dark-on-dark was nearly invisible
-			Button       = {{0,"FFFFFF"},{0.86,"E6E8EC"},{1,"CDD1D8"}},
-			ButtonDown   = {{0,"BFC4CC"},{0.08,"D4D8DE"},{0.94,"D8DCE2"},{1,"E8EAEE"}},
+			Button       = {{0,"40454E"},{0.86,"353A42"},{1,"2C3037"}},
+			ButtonDown   = {{0,"25292F"},{0.08,"2C3037"},{0.94,"30343B"},{1,"383C44"}},
 			HoverRing    = {{0,"9CC2FF"},{0.3,"6FA4FF"},{0.7,"4C8DF6"},{1,"2F6FE0"}},
 			Check        = {{0,"1E2126"},{1,"2A2E35"}},
 			CheckHover   = {{0,"2F3E5A"},{1,"3D5A8A"}},
@@ -385,21 +384,26 @@ end
 ------------------------------------------------------------------------
 -- Classic XP push button (used by buttons, keybinds)
 ------------------------------------------------------------------------
+-- Returns the clickable button and the label that holds its text.
+-- The gradient sits on its own fill layer: a UIGradient also tints its parent's text, which
+-- turned light text on dark buttons (Dark theme) into dark-on-dark.
 local function xpButton(parent, pos, size, text)
-	local b = new("TextButton", {
-		Parent = parent, Position = pos, Size = size, BackgroundColor3 = Theme.White, BackgroundTransparency = 0,
-		Text = text or "", TextColor3 = Theme.ButtonText, corner(3), stroke(Theme.ButtonBorder),
+	local b = new("TextButton", { Parent = parent, Position = pos, Size = size, BackgroundTransparency = 1 })
+	local fill = new("Frame", {
+		Parent = b, Size = ud(1, 0, 1, 0), BackgroundColor3 = Theme.White, ZIndex = 1,
+		corner(3), stroke(Theme.ButtonBorder),
 	})
-	local g = gradient(G.Button); g.Parent = b
-	local ring = new("Frame", { Parent = b, BackgroundTransparency = 1, Position = px(2, 2), Size = ud(1, -4, 1, -4), Visible = false, corner(2) })
+	local g = gradient(G.Button); g.Parent = fill
+	local ring = new("Frame", { Parent = b, BackgroundTransparency = 1, Position = px(2, 2), Size = ud(1, -4, 1, -4), Visible = false, ZIndex = 2, corner(2) })
 	local rs = stroke(Theme.HoverStroke, 2); rs.Parent = ring
 	gradient(G.HoverRing).Parent = rs
+	local label = new("TextLabel", { Parent = b, Name = "Label", Size = ud(1, 0, 1, 0), Text = text or "", TextColor3 = Theme.ButtonText, ZIndex = 3 })
 
 	connect(b.MouseEnter, function() ring.Visible = true end)
 	connect(b.MouseLeave, function() ring.Visible = false; g.Color = seq(G.Button) end)
 	connect(b.MouseButton1Down, function() g.Color = seq(G.ButtonDown) end)
 	connect(b.MouseButton1Up, function() g.Color = seq(G.Button) end)
-	return b
+	return b, label
 end
 
 ------------------------------------------------------------------------
@@ -567,12 +571,12 @@ end
 function Group:AddButton(o, cb)
 	if type(o) == "string" then o = { Text = o, Callback = cb } end
 	local holder = new("Frame", { Parent = self._content, BackgroundTransparency = 1, Size = ud(1, 0, 0, 25), LayoutOrder = self:_next() })
-	local b = xpButton(holder, px(1, 1), ud(1, -2, 0, 23), o.Text or "Button")
+	local b, label = xpButton(holder, px(1, 1), ud(1, -2, 0, 23), o.Text or "Button")
 	connect(b.MouseButton1Click, function()
 		if o.Callback then task.spawn(o.Callback) end
 	end)
 	Library:_tooltip(b, o.Tooltip)
-	return { Instance = b, SetText = function(_, t) b.Text = t end }
+	return { Instance = b, SetText = function(_, t) label.Text = t end }
 end
 
 -- Combo box ---------------------------------------------------------------
@@ -710,13 +714,13 @@ function Group:AddKeybind(flag, o)
 
 	local row = new("Frame", { Parent = self._content, BackgroundTransparency = 1, Size = ud(1, 0, 0, 23), LayoutOrder = self:_next() })
 	new("TextLabel", { Parent = row, Size = ud(1, -92, 1, 0), Text = o.Text or flag, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd })
-	local b = xpButton(row, ud(1, -86, 0, 1), px(85, 21), "")
+	local b, label = xpButton(row, ud(1, -86, 0, 1), px(85, 21), "")
 
 	local capturing = false
 	local function apply(k, doFire)
 		K.Value = k
 		Library.Flags[flag] = k
-		b.Text = keyName(k)
+		label.Text = keyName(k)
 		if doFire then
 			if o.Changed then task.spawn(o.Changed, k) end
 			for _, f in ipairs(K._changed) do task.spawn(f, k) end
@@ -735,7 +739,7 @@ function Group:AddKeybind(flag, o)
 		if capturing then return end
 		capturing = true
 		Library._binding = true
-		b.Text = "..."
+		label.Text = "..."
 	end)
 
 	connect(UIS.InputBegan, function(input, gp)
