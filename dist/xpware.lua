@@ -1447,7 +1447,7 @@ end)()
 	xpware - Murder Mystery 2
 	Engine: Roblox client (executor)  |  Language: Luau
 
-	Built tab by tab. Done: ESP, Teleport. Everything else is still a stub.
+	Built tab by tab. Done: ESP, Teleport, Combat. Everything else is still a stub.
 	Where the library comes from:
 	  - bundled by build.ps1: `Library` is defined above this file
 	  - Roblox Studio: ReplicatedStorage.xpware.xpui ModuleScript
@@ -1476,7 +1476,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.7.2"
+local VERSION = "0.8"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -1559,7 +1559,7 @@ end
 --   lobby:  workspace.Lobby
 --   roles:  Remotes.Extras.GetPlayerData -> { [name] = { Role, Dead, Killed, Coins, ... } }
 --   tools:  Knife / Gun in Backpack or Character
---   gun drop: "GunDrop" (not confirmed yet)
+--   gun drop: Workspace.<Map>.GunDrop
 ------------------------------------------------------------------------
 local State = { map = nil, lobbyBox = nil, gun = nil, data = {} }
 
@@ -1992,26 +1992,313 @@ local EspItems = ESP:AddGroup("Items", "Right")
 EspItems:AddToggle("gun_esp", { Text = "Dropped Gun", Default = true })
 EspItems:AddToggle("coin_esp", { Text = "Coins", Callback = function(v) if not v then clearCoinEsp() end end })
 
-------------------------------------------------------------------------
--- Combat
-------------------------------------------------------------------------
-local Combat = Window:AddTab("Combat")
+local busy = false -- true while Kill All (and later, fling) is driving the character
 
-local Sheriff = Combat:AddGroup("Sheriff", "Left")
-Sheriff:AddToggle("silent_aim", { Text = "Silent Aim", Tooltip = "Gun shots land on the murderer wherever you click", Callback = stub })
-Sheriff:AddSlider("hit_chance", { Text = "Hit Chance", Min = 0, Max = 100, Default = 100, Suffix = "%", Callback = stub })
-Sheriff:AddDropdown("aim_part", { Text = "Aim Part", Values = { "Head", "Torso", "HumanoidRootPart" }, Default = "HumanoidRootPart", Callback = stub })
-Sheriff:AddSlider("prediction", { Text = "Prediction", Min = 0, Max = 300, Default = 120, Suffix = " ms", Tooltip = "Leads the target by their velocity", Callback = stub })
-Sheriff:AddToggle("auto_shoot", { Text = "Auto Shoot Murderer", Tooltip = "Fires when the murderer is in line of sight. Pair with Silent Aim.", Callback = stub })
-Sheriff:AddKeybind("shoot_key", { Text = "Shoot Murderer", Default = Enum.KeyCode.E, Callback = stub })
+------------------------------------------------------------------------
+-- Combat. Names and arguments come from a remote capture:
+--   gun:   Gun.Shoot:FireServer(rootCFrame, CFrame.new(aimPosition))
+--   throw: Knife.Events.KnifeThrown:FireServer(CFrame, CFrame.new(aimPosition))
+--   stab:  Knife.Events.KnifeStabbed:FireServer(), then Knife.Events.HandleTouched:FireServer(part)
+--          for every part the blade touched (the client reports its own hits)
+-- Wrapped in do ... end: a Lua chunk holds at most 200 live locals and nothing outside this tab
+-- needs these helpers. Do the same for the next tabs.
+------------------------------------------------------------------------
+do
+	local GENV = (typeof(getgenv) == "function" and getgenv()) or _G
+	local GUN_COOLDOWN = 3     -- seconds between shots; the server reloads the gun and ignores early ones
+	local KNIFE_COOLDOWN = 0.5 -- seconds between swings (aura, kill all)
+	local hookReady = typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function"
 
-local Murderer = Combat:AddGroup("Murderer", "Right")
-Murderer:AddToggle("knife_aura", { Text = "Knife Aura", Callback = stub })
-Murderer:AddSlider("aura_range", { Text = "Aura Range", Min = 5, Max = 25, Default = 12, Suffix = " studs", Callback = stub })
-Murderer:AddToggle("auto_equip", { Text = "Auto Equip Knife", Default = true, Callback = stub })
-Murderer:AddToggle("throw_assist", { Text = "Throw Assist", Tooltip = "Knife throws hit whoever's closest to your cursor", Callback = stub })
-Murderer:AddDivider()
-Murderer:AddButton({ Text = "Kill All", Callback = stub })
+	local lastGunShot, lastStab = 0, 0
+	local Aim = { gun = nil, throw = nil } -- where redirected shots go, refreshed every frame
+
+	------------------------------------------------------------------
+	-- helpers
+	------------------------------------------------------------------
+	-- equip and wait until the tool is in the character (its remotes only work from there)
+	local function equip(tool)
+		local h = myHum()
+		if not (tool and h) then return false end
+		if tool.Parent ~= LP.Character then
+			h:EquipTool(tool)
+			local t0 = os.clock()
+			while tool.Parent ~= LP.Character and os.clock() - t0 < 0.4 do task.wait() end
+		end
+		return tool.Parent == LP.Character
+	end
+
+	-- where to aim at a player: the chosen body part, led by their velocity
+	local function aimPoint(p, partName)
+		local c = p and p.Character
+		local root = c and c:FindFirstChild("HumanoidRootPart")
+		if not root then return nil end
+		local part
+		if partName == "Head" then
+			part = c:FindFirstChild("Head")
+		elseif partName == "Torso" then
+			part = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
+		end
+		part = part or root
+		local v = root.AssemblyLinearVelocity
+		local lead = (Flags.prediction or 0) / 1000
+		return part.Position + Vector3.new(v.X, v.Y * 0.5, v.Z) * lead
+	end
+
+	-- the player nearest the cursor (anyone off screen ranks behind everyone on screen)
+	local function closestToCursor()
+		local camera = cam()
+		local mouse = UIS:GetMouseLocation()
+		local me = myRoot()
+		local best, bestScore
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LP and inRound(p) then
+				local r = rootOf(p)
+				local pos, onScreen = camera:WorldToViewportPoint(r.Position)
+				local score
+				if onScreen then
+					score = (Vector2.new(pos.X, pos.Y) - mouse).Magnitude
+				elseif me then
+					score = 1e5 + (r.Position - me.Position).Magnitude
+				end
+				if score and (not bestScore or score < bestScore) then best, bestScore = p, score end
+			end
+		end
+		return best
+	end
+
+	local function hasSight(p)
+		local me = LP.Character
+		local head = me and me:FindFirstChild("Head")
+		local r = rootOf(p)
+		if not (head and r) then return false end
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = { me, p.Character, espFolder }
+		params.RespectCanCollide = true -- coins, effects and other non-solid parts don't block a shot
+		return workspace:Raycast(head.Position, r.Position - head.Position, params) == nil
+	end
+
+	------------------------------------------------------------------
+	-- sheriff
+	------------------------------------------------------------------
+	local function fireGun(pos)
+		local gun = hasTool(LP, "Gun")
+		local shoot = gun and gun:FindFirstChild("Shoot")
+		local root = myRoot()
+		if not (shoot and root) then return false, "you don't have the gun" end
+		if not equip(gun) then return false, "couldn't equip the gun" end
+		lastGunShot = os.clock()
+		shoot:FireServer(root.CFrame, CFrame.new(pos))
+		return true
+	end
+
+	-- returns true, or false and why not
+	local function shootMurderer(needSight)
+		if os.clock() - lastGunShot < GUN_COOLDOWN then return false, "the gun is reloading" end
+		if not hasTool(LP, "Gun") then return false, "you don't have the gun" end
+		local m = findRole("Murderer")
+		if not m then return false, "no murderer to shoot" end
+		if needSight and not hasSight(m) then return false, "no line of sight" end
+		local pos = aimPoint(m, Flags.aim_part)
+		if not pos then return false, "the murderer has no character" end
+		return fireGun(pos)
+	end
+
+	------------------------------------------------------------------
+	-- murderer
+	------------------------------------------------------------------
+	-- one swing, the way the real client sends it: KnifeStabbed once, then HandleTouched per hit
+	local function stab(knife, victims)
+		local events = knife and knife:FindFirstChild("Events")
+		local stabbed = events and events:FindFirstChild("KnifeStabbed")
+		local touched = events and events:FindFirstChild("HandleTouched")
+		if not (stabbed and touched) then return false end
+		lastStab = os.clock()
+		stabbed:FireServer()
+		for _, p in ipairs(victims) do
+			local c = p.Character
+			local root = c and c:FindFirstChild("HumanoidRootPart")
+			local torso = c and c:FindFirstChild("UpperTorso")
+			if root then touched:FireServer(root) end
+			if torso then touched:FireServer(torso) end
+		end
+		return true
+	end
+
+	local function knifeAura()
+		if os.clock() - lastStab < KNIFE_COOLDOWN then return end
+		local me, knife = myRoot(), hasTool(LP, "Knife")
+		if not (me and knife) then return end
+		local victims, range = {}, Flags.aura_range or 12
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LP and inRound(p) and (rootOf(p).Position - me.Position).Magnitude <= range then
+				table.insert(victims, p)
+			end
+		end
+		if #victims == 0 then return end
+		if knife.Parent ~= LP.Character and not (Flags.auto_equip and equip(knife)) then return end
+		stab(knife, victims)
+	end
+
+	-- walk up to everyone alive and stab them, then go back to where you started
+	local function killAll()
+		if busy then return end
+		local knife = hasTool(LP, "Knife")
+		if not knife then notify("You're not the murderer.") return end
+		if not myRoot() then notify("You don't have a character right now.") return end
+		busy = true
+		local home = myRoot().CFrame
+		local tried, killed = 0, 0
+		local ok, err = pcall(function()
+			if not equip(knife) then error("couldn't equip the knife") end
+			for _, p in ipairs(Players:GetPlayers()) do
+				if not running() then break end
+				if p ~= LP and inRound(p) then
+					tried += 1
+					local t0 = os.clock()
+					while running() and inRound(p) and myRoot() and os.clock() - t0 < 2 do
+						teleport(rootOf(p).CFrame * CFrame.new(0, 0, 2.5), true)
+						if os.clock() - lastStab >= KNIFE_COOLDOWN then stab(knife, { p }) end
+						task.wait(0.08)
+					end
+					if p.Parent and not inRound(p) then killed += 1 end
+				end
+			end
+		end)
+		if myRoot() then teleport(home, true) end -- back home even if something above errored
+		busy = false
+		if not ok then notify("Kill All stopped: " .. tostring(err)) return end
+		notify(tried == 0 and "Nobody to kill." or string.format("Kill All: %d of %d down.", killed, tried))
+	end
+
+	------------------------------------------------------------------
+	-- aim redirect: silent aim (gun) and throw assist (knife)
+	------------------------------------------------------------------
+	-- refreshed every frame. The hook below only READS these: it runs inside every network call in
+	-- the game, and a method call in there would overwrite the namecall the original is about to use.
+	local function updateAim()
+		Aim.gun, Aim.throw = nil, nil
+		if Flags.silent_aim then
+			local m = findRole("Murderer")
+			if m then Aim.gun = aimPoint(m, Flags.aim_part) end
+		end
+		if Flags.throw_assist then
+			local t = closestToCursor()
+			if t then Aim.throw = aimPoint(t, "HumanoidRootPart") end
+		end
+	end
+
+	-- property reads only, no method calls (see above). Returns true if the arguments were changed.
+	local function redirect(remote, args)
+		if args.n < 2 or typeof(args[2]) ~= "CFrame" then return false end
+		local name = remote.Name
+		if name == "Shoot" then
+			local tool = remote.Parent
+			if tool and tool.Name == "Gun" and tool.Parent == LP.Character then
+				lastGunShot = os.clock() -- your own shots start the reload too
+				local pos = Aim.gun
+				if pos and math.random(1, 100) <= (Flags.hit_chance or 100) then
+					args[2] = CFrame.new(pos)
+					return true
+				end
+			end
+		elseif name == "KnifeThrown" then
+			local events = remote.Parent
+			local tool = events and events.Parent
+			if tool and tool.Name == "Knife" and tool.Parent == LP.Character then
+				local pos = Aim.throw
+				if pos then
+					args[2] = CFrame.new(pos)
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	if hookReady then
+		GENV.__xpware_redirect = redirect
+		onUnload(function()
+			if GENV.__xpware_redirect == redirect then GENV.__xpware_redirect = nil end
+		end)
+		-- installed once per session; a re-run just swaps the function the hook calls
+		if not GENV.__xpware_hooked then
+			GENV.__xpware_hooked = true
+			local wrap = typeof(newcclosure) == "function" and newcclosure or function(f) return f end
+			local isOurs = typeof(checkcaller) == "function" and checkcaller or function() return false end
+			local setMethod = typeof(setnamecallmethod) == "function" and setnamecallmethod or nil
+			local getMethod = getnamecallmethod
+			local old
+			old = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+				local method = getMethod()
+				if method == "FireServer" then
+					local fn = GENV.__xpware_redirect
+					if fn and not isOurs() then
+						local args = table.pack(...)
+						local ok, changed = pcall(fn, self, args)
+						if setMethod then setMethod(method) end
+						if ok and changed then return old(self, table.unpack(args, 1, args.n)) end
+					end
+				end
+				return old(self, ...)
+			end))
+		end
+	end
+
+	------------------------------------------------------------------
+	-- loops
+	------------------------------------------------------------------
+	on(RunService.RenderStepped, updateAim)
+
+	task.spawn(function()
+		local lastErr
+		while running() do
+			if not busy and inRound(LP) then
+				local ok, err = pcall(function()
+					if Flags.auto_shoot then shootMurderer(true) end
+					if Flags.knife_aura then knifeAura() end
+				end)
+				if not ok and err ~= lastErr then
+					lastErr = err
+					warn("[xpware] combat: " .. tostring(err))
+				end
+			end
+			task.wait(0.1)
+		end
+	end)
+
+	------------------------------------------------------------------
+	-- tab
+	------------------------------------------------------------------
+	local Combat = Window:AddTab("Combat")
+
+	local SheriffBox = Combat:AddGroup("Sheriff", "Left")
+	SheriffBox:AddToggle("silent_aim", { Text = "Silent Aim", Tooltip = "Gun shots land on the murderer wherever you click", Callback = function(v)
+		if v and not hookReady then
+			notify("Silent aim needs hookmetamethod, which this executor doesn't have. Auto Shoot and the shoot key still work.", nil, 6)
+		end
+	end })
+	SheriffBox:AddSlider("hit_chance", { Text = "Hit Chance", Min = 0, Max = 100, Default = 100, Suffix = "%", Tooltip = "Silent Aim only: how often a shot gets redirected" })
+	SheriffBox:AddDropdown("aim_part", { Text = "Aim Part", Values = { "Head", "Torso", "HumanoidRootPart" }, Default = "HumanoidRootPart" })
+	SheriffBox:AddSlider("prediction", { Text = "Prediction", Min = 0, Max = 300, Default = 120, Suffix = " ms", Tooltip = "Leads the target by their velocity (gun and knife throws)" })
+	SheriffBox:AddToggle("auto_shoot", { Text = "Auto Shoot Murderer", Tooltip = "Shoots as soon as you have line of sight. Works without Silent Aim." })
+	SheriffBox:AddKeybind("shoot_key", { Text = "Shoot Murderer", Default = Enum.KeyCode.E, Callback = function()
+		local ok, why = shootMurderer(false)
+		if not ok and why then notify("Can't shoot: " .. why .. ".", nil, 2) end
+	end })
+
+	local MurdererBox = Combat:AddGroup("Murderer", "Right")
+	MurdererBox:AddToggle("knife_aura", { Text = "Knife Aura", Tooltip = "Stabs everyone inside the range slider" })
+	MurdererBox:AddSlider("aura_range", { Text = "Aura Range", Min = 5, Max = 25, Default = 12, Suffix = " studs" })
+	MurdererBox:AddToggle("auto_equip", { Text = "Auto Equip Knife", Default = true, Tooltip = "Pulls the knife out when the aura needs it" })
+	MurdererBox:AddToggle("throw_assist", { Text = "Throw Assist", Tooltip = "Knife throws hit whoever's closest to your cursor", Callback = function(v)
+		if v and not hookReady then
+			notify("Throw assist needs hookmetamethod, which this executor doesn't have.", nil, 6)
+		end
+	end })
+	MurdererBox:AddDivider()
+	MurdererBox:AddButton({ Text = "Kill All", Tooltip = "Teleports to everyone alive, stabs them, then brings you back", Callback = killAll })
+end
 
 ------------------------------------------------------------------------
 -- Teleport
