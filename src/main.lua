@@ -29,7 +29,7 @@ local LP = Players.LocalPlayer
 local Flags = Library.Flags
 
 local NAME = "xpware"
-local VERSION = "0.4"
+local VERSION = "0.4.1"
 local function stub() end
 
 ------------------------------------------------------------------------
@@ -95,9 +95,26 @@ local ROLE_COLORS = {
 local GUN_COLOR = Color3.fromRGB(170, 90, 255)
 local COIN_COLOR = Color3.fromRGB(255, 215, 0)
 
+local function isMapCandidate(m)
+	return m.Name ~= "Lobby" and (m:IsA("Model") or m:IsA("Folder")) and not Players:GetPlayerFromCharacter(m)
+end
+
+-- MM2 streams the map, so its children show up gradually. Try the cheap checks first, then
+-- fall back to a deep search for CoinContainer (rate limited, it walks the whole workspace).
+local lastDeepSearch = 0
 local function findMap()
 	for _, m in ipairs(workspace:GetChildren()) do
-		if m.Name ~= "Lobby" and m:IsA("Model") and m:FindFirstChild("CoinContainer") then return m end
+		if isMapCandidate(m) and m:FindFirstChild("CoinContainer") then return m end
+	end
+	for _, m in ipairs(workspace:GetChildren()) do
+		if isMapCandidate(m) and m:FindFirstChild("Spawns") then return m end
+	end
+	if os.clock() - lastDeepSearch > 3 then
+		lastDeepSearch = os.clock()
+		local cc = workspace:FindFirstChild("CoinContainer", true)
+		local top = cc
+		while top and top.Parent ~= workspace do top = top.Parent end
+		if top and isMapCandidate(top) then return top end
 	end
 end
 
@@ -142,9 +159,10 @@ local function isDead(p)
 	return d ~= nil and (d.Dead == true or d.Killed == true)
 end
 
--- alive, on the map, not marked dead by the game, not standing in the lobby
+-- alive, not marked dead by the game, not standing in the lobby. Deliberately does NOT need the
+-- map: MM2 streams the map in, so CoinContainer can be missing mid-round and that hid everyone.
 local function inRound(p)
-	return State.map ~= nil and isAlive(p) and not isDead(p) and not inLobby(p)
+	return isAlive(p) and not isDead(p) and not inLobby(p)
 end
 
 local function isCoinLive(c)
@@ -156,7 +174,7 @@ end
 
 local function liveCoins()
 	local list = {}
-	local cc = State.map and State.map:FindFirstChild("CoinContainer")
+	local cc = State.map and State.map:FindFirstChild("CoinContainer", true)
 	if cc then
 		for _, c in ipairs(cc:GetChildren()) do
 			if isCoinLive(c) then table.insert(list, c) end
@@ -724,12 +742,13 @@ task.spawn(function()
 end)
 
 local function dataStatus()
-	if not dataRemote then return "Role data: GetPlayerData not found" end
-	if Data.at == 0 then return "Role data: waiting..." .. (Data.err and (" (" .. Data.err .. ")") or "") end
+	local mapText = " | map: " .. (State.map and State.map.Name or "none")
+	if not dataRemote then return "Role data: GetPlayerData not found" .. mapText end
+	if Data.at == 0 then return "Role data: waiting..." .. (Data.err and (" (" .. Data.err .. ")") or "") .. mapText end
 	local m
 	for name, d in pairs(State.data) do if d.Role == "Murderer" then m = name end end
 	return string.format("Role data: %d players, %ds ago%s", Data.count, math.floor(os.clock() - Data.at),
-		m and (" | murderer: " .. m) or "")
+		m and (" | murderer: " .. m) or "") .. mapText
 end
 
 -- dropped gun tracking
