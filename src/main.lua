@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.13.0"
+local VERSION = "1.14.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -1485,15 +1485,26 @@ do
 
 	local function stillFarming() return running() and Flags.autofarm_enabled and Flags.coin_farm and not busy end
 
+	local skipUntil = setmetatable({}, { __mode = "k" }) -- coin -> when to try it again (the murderer was too close)
+	local function murdererNear(pos, radius)
+		if roleOf(LP) == "Murderer" then return false end
+		local m = findRole("Murderer")
+		local r = m and rootOf(m)
+		return r ~= nil and (r.Position - pos).Magnitude <= radius
+	end
+
 	local function nextCoin(me, avoid)
 		local murderer = avoid and roleOf(LP) ~= "Murderer" and findRole("Murderer")
 		local mr = murderer and rootOf(murderer)
 		local radius = Flags.avoid_radius or 25
-		local best, bestDist
+		local now = os.clock()
+		local best, bestCost
 		for _, coin in ipairs(liveCoins()) do
-			if not mr or (coin.Position - mr.Position).Magnitude > radius then
-				local d = (coin.Position - me.Position).Magnitude
-				if not bestDist or d < bestDist then best, bestDist = coin, d end
+			if (skipUntil[coin] or 0) < now and (not mr or (coin.Position - mr.Position).Magnitude > radius) then
+				local d = coin.Position - me.Position
+				-- climbing is what shows us to the murderer, so a coin on another storey costs extra
+				local cost = math.sqrt(d.X * d.X + d.Z * d.Z) + math.abs(d.Y) * 1.5
+				if not bestCost or cost < bestCost then best, bestCost = coin, cost end
 			end
 		end
 		return best
@@ -1512,6 +1523,46 @@ do
 	------------------------------------------------------------------
 	local hiding, hideY, homeCF, pin = false, nil, nil, nil
 	local displaced = 0
+
+	-- Pickup aura: touch every live coin within reach without moving to it, wait a moment, and see which
+	-- ones really went. It learns how far the server allows: the reach grows past the farthest coin it
+	-- took, shrinks when nothing is taken, and after a few empty sweeps it gives up for the round and the
+	-- farm goes back to climbing under each coin. No setting for it: it just finds what works.
+	local reach, sweepFails, sweepDead = 40, 0, false
+	local function sweep()
+		local me = myRoot()
+		if sweepDead or not (hasTouch and me) then return 0 end
+		local targets = {}
+		for _, coin in ipairs(liveCoins()) do
+			local d = (coin.Position - me.Position).Magnitude
+			if d <= reach then table.insert(targets, { coin = coin, d = d }) end
+		end
+		if #targets == 0 then return 0 end
+		table.sort(targets, function(a, b) return a.d < b.d end)
+		for i = 1, math.min(#targets, 15) do touch(targets[i].coin) end
+		local t0 = os.clock()
+		while os.clock() - t0 < 0.2 and stillFarming() do RunService.Heartbeat:Wait() end
+		local got, farGot = 0, 0
+		for i = 1, math.min(#targets, 15) do
+			if not isCoinLive(targets[i].coin) then
+				got += 1
+				gotCoin()
+				if targets[i].d > farGot then farGot = targets[i].d end
+			end
+		end
+		if got > 0 then
+			sweepFails = 0
+			reach = math.clamp(math.max(reach, farGot + 8), 15, 40)
+		else
+			sweepFails += 1
+			reach = reach * 0.7
+			if sweepFails >= 3 then
+				sweepDead = true
+				notify("The server only takes coins up close, so I'll climb to each one instead.", "Autofarm", 6)
+			end
+		end
+		return got
+	end
 
 
 	-- Everything that moves us while hiding just sets `pin`; this puts us there every frame, so
@@ -1640,8 +1691,10 @@ do
 		end
 	end
 
-	-- Glide smoothly to just under the nearest coin, take it from there, and pause a moment before
-	-- the next one. Returns false if there was nothing to do.
+	-- Travel at the resting depth, under everything, and only climb right under the coin being taken
+	-- (never diagonally through a building to the next coin). Coins in reach are taken first without
+	-- moving at all. If the murderer is near a coin, leave it for a while. Pauses a moment after each coin.
+	-- Returns false if there was nothing to do.
 	local function farmStepHidden()
 		local me = myRoot()
 		if not me then return false end
@@ -1657,28 +1710,30 @@ do
 		end
 		if not hiding and not descend() then return false end
 
-		local coin = nextCoin(me, Flags.avoid_murderer and depthIdx == #TOUCH_DEPTHS)
-		if not coin then
-			-- nothing to take right now: sink to the resting depth, smoothly, and wait
-			local here = pin.Position
-			local rest = Vector3.new(here.X, hideY, here.Z)
-			if (here - rest).Magnitude > 1 then glideTo(rest, glideSpeed()) end
-			return false
-		end
+		if sweep() > 0 then return true end
 
-		local function spot(depth)
-			local y = math.max(coin.Position.Y - depth, workspace.FallenPartsDestroyHeight + 25)
-			return Vector3.new(coin.Position.X, y, coin.Position.Z)
-		end
-		glideTo(spot(TOUCH_DEPTHS[depthIdx]), glideSpeed())
+		local coin = nextCoin(me, Flags.avoid_murderer)
+		local here = pin.Position
+		-- always back down to the resting depth first: from anywhere, the way to the next coin is under the map
+		if here.Y > hideY + 1 then glideTo(Vector3.new(here.X, hideY, here.Z), glideSpeed()) end
+		if not coin then return false end
+
+		glideTo(Vector3.new(coin.Position.X, hideY, coin.Position.Z), glideSpeed())
 		if not (hiding and isCoinLive(coin) and stillFarming()) then return true end
+		if murdererNear(coin.Position, math.max(Flags.avoid_radius or 25, 15)) then
+			skipUntil[coin] = os.clock() + 6 -- he wandered over while we were travelling
+			return true
+		end
 
-		-- take it from underneath; come up a little at a time only if the touch doesn't register
+		-- rise to just under the coin; come up a little more only if the touch doesn't register
 		local got = false
 		for i = depthIdx, #TOUCH_DEPTHS do
-			pin = CFrame.new(spot(TOUCH_DEPTHS[i])) * FLAT
+			local y = math.max(coin.Position.Y - TOUCH_DEPTHS[i], hideY)
+			glideTo(Vector3.new(coin.Position.X, y, coin.Position.Z), glideSpeed())
 			local t0 = os.clock()
+			local spooked = false
 			while hiding and stillFarming() and isCoinLive(coin) and os.clock() - t0 < 0.3 do
+				if pin and murdererNear(pin.Position, 14) then spooked = true break end
 				touch(coin)
 				RunService.Heartbeat:Wait()
 			end
@@ -1687,11 +1742,18 @@ do
 				depthIdx = i
 				break
 			end
+			if spooked then
+				skipUntil[coin] = os.clock() + 6
+				break
+			end
 		end
 		if got then gotCoin() end
 
-		-- a short breather before heading for the next coin
-		holdFor(0.18 + math.random() * 0.12, function() return false end)
+		-- straight back down out of sight, then a short breather before the next coin
+		if hiding and stillFarming() then
+			glideTo(Vector3.new(coin.Position.X, hideY, coin.Position.Z), glideSpeed())
+			holdFor(0.18 + math.random() * 0.12, function() return false end)
+		end
 		return true
 	end
 
@@ -1702,6 +1764,7 @@ do
 		local me = myRoot()
 		if not me then return false end
 		forceNoclip = true
+		if sweep() > 0 then return true end
 		local coin = nextCoin(me, Flags.avoid_murderer)
 		if not coin then return false end
 		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / glideSpeed(), Enum.EasingStyle.Linear),
@@ -1914,6 +1977,7 @@ do
 				if not inRound(LP) then
 					if localCount > 0 then roundsDone += 1 end
 					localCount, displaced, depthIdx = 0, 0, 1
+					reach, sweepFails, sweepDead = 40, 0, false
 					if parked then
 						-- the round is over: put the platform away without teleporting back to the old map spot
 						parked = false
