@@ -1551,62 +1551,50 @@ function Library:CreateWindow(opt)
 			return setmetatable({ _content = content, _order = 0 }, Group)
 		end
 
-		-- a big on/off switch across the top of the tab; both columns move down to make room.
+		-- The tab's master switch: the regular XP checkbox, just bigger. It's built from exactly the
+		-- same parts as AddToggle at normal size and scaled up as a whole, so it stays pixel-for-pixel
+		-- XP. Sits across the top of the tab with an etched line under it; both columns move down.
 		-- Behaves like AddToggle (Flags, Options, Set, OnChanged, Callback), one per tab.
 		function tab:AddMasterToggle(flag, o)
 			o = o or {}
 			if tab._master then return tab._master end
 			local T = element({ Type = "Toggle", Value = false })
-			local BANNER_H = 50
+			local SCALE, BANNER_H = 1.5, 50
 			for _, col in ipairs({ tab._left, tab._right }) do
 				col.Position = col.Position + px(0, BANNER_H)
 				col.Size = col.Size - px(0, BANNER_H)
 			end
 
-			local card = new("TextButton", {
-				Parent = page, Position = px(12, 12), Size = ud(1, -24, 0, 36),
-				BackgroundColor3 = Theme.White, BackgroundTransparency = 0, corner(4),
-			})
-			-- the gradient tints only the card itself; every label is a child, so text keeps its color
-			local cardGrad = gradient(G.Button); cardGrad.Parent = card
-			local edge = stroke(Theme.GroupBorder, 1); edge.Parent = card
-
-			local check = new("Frame", { Parent = card, Position = px(12, 9), Size = px(18, 18), BackgroundColor3 = Theme.White, stroke(Theme.CheckBorder) })
-			local checkGrad = gradient(G.Check, 45); checkGrad.Parent = check
-			local setMark = checkMark(check, 18, 18, { { 3, 9, 7, 13.5 }, { 6.5, 13.5, 15, 4 } }, 2.5)
-
+			local row = new("TextButton", { Parent = page, Position = px(14, 12), Size = ud(1 / SCALE, -28 / SCALE, 0, 17) })
+			new("UIScale", { Parent = row, Scale = SCALE })
+			local cb = new("Frame", { Parent = row, Position = px(1, 3), Size = px(11, 11), BackgroundColor3 = Theme.White, stroke(Theme.CheckBorder) })
+			local cg = gradient(G.Check, 45); cg.Parent = cb
+			new("Frame", { Parent = cb, Position = px(2, 2), Size = px(7, 7), BackgroundColor3 = Theme.White, gradient(G.Check, 45) })
+			local setMark = checkMark(cb, 11, 11, { { 2, 5, 4.5, 8 }, { 4, 8, 9, 2.5 } }, 2)
 			new("TextLabel", {
-				Parent = card, Position = px(40, 0), Size = ud(1, -120, 1, 0), Text = o.Text or flag,
-				FontFace = FONT_BOLD, TextSize = 16, TextColor3 = Theme.ButtonText, TextXAlignment = Enum.TextXAlignment.Left,
+				Parent = row, Position = px(19, 0), Size = ud(1, -19, 1, 0), Text = o.Text or flag,
+				TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
 			})
-			local state = new("TextLabel", {
-				Parent = card, Position = ud(1, -72, 0, 0), Size = px(60, 36),
-				FontFace = FONT_BOLD, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Right,
-			})
+
+			-- etched separator, same as AddDivider
+			box(page, px(12, BANNER_H - 6), ud(1, -24, 0, 1), Theme.Etch)
+			box(page, px(12, BANNER_H - 5), ud(1, -24, 0, 1), Theme.Light)
+
+			connect(row.MouseEnter, function() cg.Color = seq(G.CheckHover) end)
+			connect(row.MouseLeave, function() cg.Color = seq(G.Check) end)
 
 			local function apply(v, doFire)
 				v = v and true or false
 				T.Value = v
 				Library.Flags[flag] = v
 				setMark(v, doFire)
-				state.Text = v and "ON" or "OFF"
-				local stateColor = v and Theme.Check or Theme.TextDim
-				local edgeColor, edgeThick = v and Theme.Check or Theme.GroupBorder, v and 2 or 1
-				if doFire then
-					TweenService:Create(state, BLEND, { TextColor3 = stateColor }):Play()
-					TweenService:Create(edge, BLEND, { Color = edgeColor, Thickness = edgeThick }):Play()
-				else
-					state.TextColor3, edge.Color, edge.Thickness = stateColor, edgeColor, edgeThick
-				end
 				if doFire then fire(T, o.Callback, v) end
 			end
 			function T:Set(v) apply(v, true) end
 
-			connect(card.MouseButton1Click, function() apply(not T.Value, true) end)
-			connect(card.MouseEnter, function() checkGrad.Color = seq(G.CheckHover) end)
-			connect(card.MouseLeave, function() checkGrad.Color = seq(G.Check) end)
+			connect(row.MouseButton1Click, function() apply(not T.Value, true) end)
 			apply(o.Default, false)
-			Library:_tooltip(card, o.Tooltip)
+			Library:_tooltip(row, o.Tooltip)
 			Library.Options[flag] = T
 			tab._master = T
 			return T
@@ -1671,7 +1659,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.9.2"
+local VERSION = "0.9.3"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
