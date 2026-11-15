@@ -342,6 +342,27 @@ local function hoverable(gui)
 	return state
 end
 
+-- Interface sounds: a tick when the mouse moves onto a button and a click when it's pressed. They
+-- play locally from SoundService; the slider uses the click sound for now.
+local SFX = { hover = "rbxassetid://109956626126666", click = "rbxassetid://112118121103525" }
+local sfxSounds = {}
+local function playSfx(kind)
+	if Library.Unloaded then return end
+	pcall(function()
+		local snd = sfxSounds[kind]
+		if not (snd and snd.Parent) then
+			snd = Instance.new("Sound")
+			snd.Name = "xpui_" .. kind
+			snd.SoundId = SFX[kind]
+			snd.Volume = (kind == "hover") and 0.4 or 0.6
+			snd.Parent = game:GetService("SoundService")
+			sfxSounds[kind] = snd
+		end
+		snd.TimePosition = 0
+		snd:Play()
+	end)
+end
+
 local function isPress(i) return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch end
 local function isMove(i) return i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch end
 
@@ -447,9 +468,9 @@ local function xpButton(parent, pos, size, text)
 	gradient(G.HoverRing).Parent = rs
 	local label = new("TextLabel", { Parent = b, Name = "Label", Size = ud(1, 0, 1, 0), Text = text or "", TextColor3 = Theme.ButtonText, ZIndex = 3 })
 
-	connect(b.MouseEnter, function() ring.Visible = true end)
+	connect(b.MouseEnter, function() ring.Visible = true; playSfx("hover") end)
 	connect(b.MouseLeave, function() ring.Visible = false; g.Color = seq(G.Button); label.Position = px(0, 0) end)
-	connect(b.MouseButton1Down, function() g.Color = seq(G.ButtonDown); label.Position = px(1, 1) end)
+	connect(b.MouseButton1Down, function() g.Color = seq(G.ButtonDown); label.Position = px(1, 1); playSfx("click") end)
 	connect(b.MouseButton1Up, function() g.Color = seq(G.Button); label.Position = px(0, 0) end)
 	return b, label
 end
@@ -598,7 +619,7 @@ function Group:AddSlider(flag, o)
 		apply(min + (max - min) * rel, true)
 	end
 	connect(area.InputBegan, function(input)
-		if isPress(input) then dragging = true; fromInput(input) end
+		if isPress(input) then dragging = true; playSfx("click"); fromInput(input) end
 	end)
 	connect(UIS.InputChanged, function(input)
 		if dragging and isMove(input) then fromInput(input) end
@@ -1134,9 +1155,9 @@ function Library:CreateWindow(opt)
 		})
 		local shade = new("Frame", { Parent = b, Size = ud(1, 0, 1, 0), BackgroundColor3 = Theme.White, BackgroundTransparency = 1, corner(3) })
 		local glyph = new("Frame", { Parent = b, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), ZIndex = 2 })
-		connect(b.MouseEnter, function() shade.BackgroundColor3 = Theme.White; tween(shade, 0.1, { BackgroundTransparency = 0.72 }) end)
+		connect(b.MouseEnter, function() shade.BackgroundColor3 = Theme.White; tween(shade, 0.1, { BackgroundTransparency = 0.72 }); playSfx("hover") end)
 		connect(b.MouseLeave, function() tween(shade, 0.1, { BackgroundTransparency = 1 }) end)
-		connect(b.MouseButton1Down, function() shade.BackgroundColor3 = Theme.Black; shade.BackgroundTransparency = 0.78 end)
+		connect(b.MouseButton1Down, function() shade.BackgroundColor3 = Theme.Black; shade.BackgroundTransparency = 0.78; playSfx("click") end)
 		connect(b.MouseButton1Up, function() shade.BackgroundColor3 = Theme.White; shade.BackgroundTransparency = 0.72 end)
 		table.insert(captionHovers, hoverable(b))
 		return b, glyph
@@ -1553,8 +1574,8 @@ function Library:CreateWindow(opt)
 			for _, t in ipairs(W.Tabs) do t:_setActive(t == tab) end
 			lib:_closePopups()
 		end
-		connect(btn.MouseButton1Click, function() tab:Select() end)
-		connect(btn.MouseEnter, function() if not active then hl.Visible = true end end)
+		connect(btn.MouseButton1Click, function() playSfx("click"); tab:Select() end)
+		connect(btn.MouseEnter, function() playSfx("hover"); if not active then hl.Visible = true end end)
 		connect(btn.MouseLeave, function() if not active then hl.Visible = false end end)
 
 		function tab:AddGroup(gname, side)
@@ -1694,6 +1715,7 @@ function Library:Unload()
 	for _, fn in ipairs(self._onUnload) do pcall(fn) end
 	for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
 	self._conns = {}
+	for _, snd in pairs(sfxSounds) do pcall(function() snd:Destroy() end) end
 	if self.Gui then self.Gui:Destroy() end
 	if env.__xpui == self then env.__xpui = nil end
 end

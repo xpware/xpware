@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.8.0"
+local VERSION = "1.9.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -1401,9 +1401,6 @@ do
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
 	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
 	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
-	CoinsBox:AddToggle("farm_instant", { Text = "Instant Moves", Default = true, Tooltip = "Jumps straight to each coin instead of gliding. Much faster, and the likeliest to get noticed" })
-	CoinsBox:AddSlider("coin_range", { Text = "Pickup Range", Min = 0, Max = 100, Default = 40, Suffix = " studs", Tooltip = "Takes every coin this close without moving to it. 0 turns it off. If the server won't accept far pickups, it turns itself off" })
-	CoinsBox:AddSlider("farm_speed", { Text = "Glide Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Only used when Instant Moves is off. Higher is faster but easier to get kicked for" })
 	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
 	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
@@ -1412,7 +1409,14 @@ do
 
 	-- lying on your back keeps the whole body a stud or two tall
 	local FLAT = CFrame.Angles(math.rad(90), 0, 0)
-	local HIDE_DEPTH = 12 -- studs below the lowest coin
+	local HIDE_DEPTH = 12 -- studs below the lowest coin: where we wait when there's nothing to take
+	-- A steady pace the server accepts. Jumping straight to each coin (instant moves) got us kicked for
+	-- an invalid position, so every move is a smooth glide at this speed.
+	local SPEED = 28 -- studs per second
+	-- How far below a coin to be when taking it, deepest first. We try the deepest and only come up
+	-- (and then stay at that depth) if the server doesn't register the touch from there.
+	local TOUCH_DEPTHS = { 5, 2, 0 }
+	local depthIdx = 1
 	local hasTouch = typeof(firetouchinterest) == "function"
 
 	-- the game's own per-round count when it's in the player data, otherwise our own tally
@@ -1451,45 +1455,7 @@ do
 	------------------------------------------------------------------
 	local hiding, hideY, homeCF, pin = false, nil, nil, nil
 	local displaced = 0
-	local useRemote, misses = hasTouch, 0
 
-	-- Range pickup, the coin version of a kill aura: touch every live coin within Pickup Range without
-	-- moving, wait a moment, and see which ones really went. It learns whether the server accepts far
-	-- touches: a few sweeps where nothing far away was taken turns it off, and we move to coins as before.
-	local rangeOK, rangeFails, rangeDead = false, 0, false
-	local function sweep()
-		local reach = Flags.coin_range or 0
-		local me = myRoot()
-		if reach <= 0 or rangeDead or not (hasTouch and me) then return 0 end
-		local targets = {}
-		for _, coin in ipairs(liveCoins()) do
-			local d = (coin.Position - me.Position).Magnitude
-			if d <= reach then table.insert(targets, { coin = coin, d = d }) end
-		end
-		if #targets == 0 then return 0 end
-		for _, t in ipairs(targets) do touch(t.coin) end
-		local t0 = os.clock()
-		while os.clock() - t0 < 0.2 and stillFarming() do RunService.Heartbeat:Wait() end
-		local got, farGot, farTried = 0, 0, 0
-		for _, t in ipairs(targets) do
-			if not isCoinLive(t.coin) then
-				got += 1
-				if t.d > farGot then farGot = t.d end
-			end
-			if t.d > farTried then farTried = t.d end
-		end
-		localCount += got
-		if got > 0 and farGot > 20 then
-			rangeOK, rangeFails = true, 0
-		elseif got == 0 and farTried > 20 and not rangeOK then
-			rangeFails += 1
-			if rangeFails >= 3 then
-				rangeDead = true
-				notify("The server only takes coins up close, so Pickup Range is off. I'll move to each one.", "Autofarm", 6)
-			end
-		end
-		return got
-	end
 
 	-- Everything that moves us while hiding just sets `pin`; this puts us there every frame, so
 	-- gravity never gets a chance to pull us down into the void (also when there are no coins left).
@@ -1528,7 +1494,7 @@ do
 		homeCF, hideY = me.CFrame, y
 		if h then h.PlatformStand = true end
 		forceNoclip = true
-		pin = CFrame.new(me.Position.X, hideY, me.Position.Z) * FLAT
+		pin = CFrame.new(me.Position) * FLAT -- lie down where we are; the glides carry us under
 		hiding = true
 		return true
 	end
@@ -1603,12 +1569,13 @@ do
 		end
 	end
 
-	-- slide under the nearest coin and take it from there. Returns false if there was nothing to do.
+	-- Glide smoothly to just under the nearest coin, take it from there, and pause a moment before
+	-- the next one. Returns false if there was nothing to do.
 	local function farmStepHidden()
 		local me = myRoot()
 		if not me then return false end
-		if hiding and me.Position.Y > hideY + 10 then
-			-- something moved us back up; after a few times give up hiding rather than fight the game
+		if hiding and pin and (me.Position - pin.Position).Magnitude > 20 then
+			-- something moved us away from where we're pinned; after a few times give up hiding rather than fight the game
 			displaced += 1
 			hiding = false
 			if displaced >= 3 then
@@ -1619,49 +1586,41 @@ do
 		end
 		if not hiding and not descend() then return false end
 
-		if sweep() > 0 then return true end -- everything in reach, without moving
-
-		local coin = nextCoin(myRoot() or me, Flags.avoid_murderer and not useRemote)
-		if not coin then return false end
-
-		local under = Vector3.new(coin.Position.X, hideY, coin.Position.Z)
-		local hold = CFrame.new(under) * FLAT
-		if Flags.farm_instant then
-			pin = hold -- one jump; the pin puts us there on the next frame
-			RunService.Heartbeat:Wait()
-		else
-			glideTo(under, 10 + (Flags.farm_speed or 4) * 3)
+		local coin = nextCoin(me, Flags.avoid_murderer and depthIdx == #TOUCH_DEPTHS)
+		if not coin then
+			-- nothing to take right now: sink to the resting depth, smoothly, and wait
+			local here = pin.Position
+			local rest = Vector3.new(here.X, hideY, here.Z)
+			if (here - rest).Magnitude > 1 then glideTo(rest, SPEED) end
+			return false
 		end
+
+		local function spot(depth)
+			local y = math.max(coin.Position.Y - depth, workspace.FallenPartsDestroyHeight + 25)
+			return Vector3.new(coin.Position.X, y, coin.Position.Z)
+		end
+		glideTo(spot(TOUCH_DEPTHS[depthIdx]), SPEED)
 		if not (hiding and isCoinLive(coin) and stillFarming()) then return true end
 
-		-- 1) touch it from underneath
+		-- take it from underneath; come up a little at a time only if the touch doesn't register
 		local got = false
-		local remoteTried = useRemote
-		if useRemote then
-			touch(coin)
-			holdFor(0.25, function() return not isCoinLive(coin) end)
-			got = not isCoinLive(coin)
-			if got then misses = 0 end
-		end
-		-- 2) otherwise pop up onto it for a moment and drop straight back down
-		if not got and isCoinLive(coin) and stillFarming() then
+		for i = depthIdx, #TOUCH_DEPTHS do
+			pin = CFrame.new(spot(TOUCH_DEPTHS[i])) * FLAT
 			local t0 = os.clock()
-			while hiding and isCoinLive(coin) and os.clock() - t0 < 0.5 and stillFarming() do
-				pin = CFrame.new(coin.Position) * FLAT
+			while hiding and stillFarming() and isCoinLive(coin) and os.clock() - t0 < 0.3 do
 				touch(coin)
 				RunService.Heartbeat:Wait()
 			end
-			pin = hold
-			got = not isCoinLive(coin)
-			if got and remoteTried then
-				misses += 1
-				if misses >= 1 then
-					useRemote = false
-					notify("Coins aren't registering from underneath, so I'll pop up to grab each one.", "Autofarm", 6)
-				end
+			if not isCoinLive(coin) then
+				got = true
+				depthIdx = i
+				break
 			end
 		end
 		if got then localCount += 1 end
+
+		-- a short breather before heading for the next coin
+		holdFor(0.18 + math.random() * 0.12, function() return false end)
 		return true
 	end
 
@@ -1672,22 +1631,15 @@ do
 		local me = myRoot()
 		if not me then return false end
 		forceNoclip = true
-		if sweep() > 0 then return true end -- everything in reach, without moving
 		local coin = nextCoin(me, Flags.avoid_murderer)
 		if not coin then return false end
-		if Flags.farm_instant then
-			me.CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation
+		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / SPEED, Enum.EasingStyle.Linear),
+			{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
+		tw:Play()
+		while tw.PlaybackState == Enum.PlaybackState.Playing do
+			if not (stillFarming() and isCoinLive(coin) and me.Parent) then tw:Cancel() break end
 			me.AssemblyLinearVelocity = Vector3.zero
-		else
-			local speed = 10 + (Flags.farm_speed or 4) * 3
-			local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / speed, Enum.EasingStyle.Linear),
-				{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
-			tw:Play()
-			while tw.PlaybackState == Enum.PlaybackState.Playing do
-				if not (stillFarming() and isCoinLive(coin) and me.Parent) then tw:Cancel() break end
-				me.AssemblyLinearVelocity = Vector3.zero
-				task.wait()
-			end
+			task.wait()
 		end
 		if isCoinLive(coin) and me.Parent and stillFarming() then
 			touch(coin)
@@ -1700,6 +1652,7 @@ do
 			end
 			if not isCoinLive(coin) then localCount += 1 end
 		end
+		task.wait(0.18 + math.random() * 0.12) -- a short breather before the next coin
 		return true
 	end
 
@@ -1723,7 +1676,7 @@ do
 				end
 			else
 				if not hiding then forceNoclip = false end
-				if not inRound(LP) then localCount, displaced, rangeFails, rangeDead = 0, 0, 0, false end
+				if not inRound(LP) then localCount, displaced, depthIdx = 0, 0, 1 end
 				task.wait(0.3)
 			end
 			coinLabel:Set("Collected this round: " .. coinsHeld())
