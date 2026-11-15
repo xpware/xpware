@@ -29,8 +29,7 @@ local Library = {
 	_conns = {},
 	_popups = {},
 	_onUnload = {},
-	_scale = 1,     -- how much the whole UI is scaled up or down to suit the screen
-	_scaleMult = 1, -- the user's own multiplier (Settings > UI Scale)
+	_scale = 1, -- how much the whole UI is scaled to suit the screen (automatic)
 }
 
 -- re-executing the script replaces the old UI instead of stacking a second one
@@ -963,7 +962,7 @@ function Library:PickTheme(opt)
 	local function fitPicker()
 		local v = gui.AbsoluteSize
 		if v.X < 100 or v.Y < 100 then return end -- the real size isn't known yet
-		pickScale.Scale = math.clamp(math.min(math.clamp(v.Y / 1080, 0.85, 2.5), (v.X - 16) / W, (v.Y - 16) / H), 0.3, 3)
+		pickScale.Scale = math.clamp(math.min(math.clamp(v.Y / 1080, 1, 2.5), (v.X - 16) / W, (v.Y - 16) / H), 0.3, 3)
 	end
 	fitPicker()
 	connect(gui:GetPropertyChangedSignal("AbsoluteSize"), fitPicker)
@@ -1057,6 +1056,8 @@ function Library:CreateWindow(opt)
 	if typeof(opt.Size) == "UDim2" then W0, H0 = opt.Size.X.Offset, opt.Size.Y.Offset end
 	local MIN_W, MIN_H = 460, 320
 	local tabsWidth = 0
+	local userW, userH = W0, H0 -- the size the window wants; it shrinks to fit a small screen and grows back
+	local userMoved = false     -- once dragged, it stays where the user put it instead of re-centering
 	if opt.ToggleKey then self.ToggleKey = opt.ToggleKey end
 
 	local gui = new("ScreenGui", {
@@ -1429,6 +1430,7 @@ function Library:CreateWindow(opt)
 		lastClick = now
 		if maximized then return end
 		dragging = true
+		userMoved = true
 		dragStart, startPos = input.Position, relPos(win)
 	end)
 	connect(grip.InputBegan, function(input)
@@ -1452,6 +1454,7 @@ function Library:CreateWindow(opt)
 		elseif resizing then
 			local d = (input.Position - dragStart) / sc
 			win.Size = px(math.max(MIN_W, startSize.X + d.X), math.max(MIN_H, startSize.Y + d.Y))
+			userW, userH = win.Size.X.Offset, win.Size.Y.Offset
 		elseif miniDrag then
 			local d = (input.Position - dragStart) / sc
 			if d.Magnitude > 4 then miniMoved = true end
@@ -1624,45 +1627,60 @@ function Library:CreateWindow(opt)
 
 		table.insert(W.Tabs, tab)
 		if index == 1 then tab:Select() end
+		if lib._applyScale then lib._applyScale() end -- the tab strip may have raised the minimum width
 		return tab
 	end
 
 	--------------------------------------------------------------------
-	-- scaling: fits any screen, from phones to 4K
+	-- fitting any screen, from phones to 4K
 	--------------------------------------------------------------------
-	-- 1080p is 1x. Taller screens scale the UI up with their height, a screen too small for the
-	-- window scales it down to fit (never below 0.3x). lib._scaleMult is the user's own slider.
+	-- Two steps. First the WINDOW shrinks to fit the screen (down to its minimum size) and its
+	-- columns scroll, so text stays full size on phones, tablets and small Roblox windows. Only a
+	-- screen too narrow or short even for that minimum scales the whole UI down. Bigger screens
+	-- scale it up: 1080p is 1x, 4K is 2x. Touch-only devices get a little extra for fingers.
+	local TOUCH_ONLY = UIS.TouchEnabled and not UIS.KeyboardEnabled
+	local MARGIN = 8
+
 	local function computeScale()
 		local v = gui.AbsoluteSize
 		if v.X < 100 or v.Y < 100 then return lib._scale end -- the real size isn't known yet
-		local want = math.clamp(v.Y / 1080, 0.85, 2.5) * lib._scaleMult
-		local fit = math.min((v.X - 16) / math.max(W0, MIN_W), (v.Y - 56) / H0)
+		local topInset = GuiService:GetGuiInset().Y
+		local want = math.clamp(v.Y / 1080, 1, 2.5) * (TOUCH_ONLY and 1.2 or 1)
+		local fit = math.min((v.X - MARGIN * 2) / MIN_W, (v.Y - topInset - MARGIN * 2) / MIN_H)
 		return math.clamp(math.min(want, fit), 0.3, 3)
 	end
 
 	local function applyScale()
 		local s = computeScale()
-		if math.abs(s - lib._scale) < 0.005 then return end
-		lib._scale = s
-		uiScale.Scale = s
-		scaler.Size = UDim2.fromScale(1 / s, 1 / s)
-		lib:_closePopups()
-		-- keep the window and the bar on screen, and a maximized window filling it
-		local v = gui.AbsoluteSize / s
+		if math.abs(s - lib._scale) >= 0.005 then
+			lib._scale = s
+			uiScale.Scale = s
+			scaler.Size = UDim2.fromScale(1 / s, 1 / s)
+			lib:_closePopups()
+		end
+		local v = gui.AbsoluteSize / lib._scale -- the screen in UI pixels
+		local topInset = GuiService:GetGuiInset().Y / lib._scale
+		if maximized then
+			win.Size = px(v.X, v.Y)
+		else
+			local w = math.clamp(userW, MIN_W, math.max(MIN_W, v.X - MARGIN * 2))
+			local h = math.clamp(userH, MIN_H, math.max(MIN_H, v.Y - topInset - MARGIN * 2))
+			win.Size = px(w, h)
+			if not userMoved then
+				win.Position = px(math.floor((v.X - w) / 2), math.max(math.floor(topInset + MARGIN), math.floor((v.Y - h) / 2) - 20))
+			end
+		end
+		-- keep the window and the bar on screen
 		local function keep(obj, w)
 			local p = obj.Position
-			if p.X.Scale ~= 0 or p.Y.Scale ~= 0 then return end -- still centered by scale
-			obj.Position = px(math.clamp(p.X.Offset, -w + 100, v.X - 100), math.clamp(p.Y.Offset, 0, math.max(0, v.Y - 40)))
+			if p.X.Scale ~= 0 or p.Y.Scale ~= 0 then return end
+			obj.Position = px(math.clamp(p.X.Offset, -w + 100, v.X - 100), math.clamp(p.Y.Offset, topInset, math.max(topInset, v.Y - 40)))
 		end
 		keep(win, win.Size.X.Offset)
 		keep(mini, MINI_W)
-		if maximized then win.Size = px(v.X, v.Y) end
 	end
 
-	function lib:SetScale(multiplier)
-		self._scaleMult = math.clamp(tonumber(multiplier) or 1, 0.5, 2)
-		applyScale()
-	end
+	lib._applyScale = applyScale
 	connect(gui:GetPropertyChangedSignal("AbsoluteSize"), applyScale)
 	applyScale()
 
@@ -1720,7 +1738,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.2.0"
+local VERSION = "1.3.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3473,7 +3491,21 @@ do
 			spinning = false
 			h.AutoRotate = true
 		end
-		if Flags.jump_spam and h.FloorMaterial ~= Enum.Material.Air then h.Jump = true end
+		-- Jump spam: grounded, and not seated, pinned or mid-fling. Setting Humanoid.Jump alone is
+		-- easily ignored or blocked, so ask for the jump both ways (the flag and the state change),
+		-- and switch jumping back on if the game turned it off or set the power to 0.
+		if Flags.jump_spam and not busy and not h.Sit and not h.PlatformStand and h.FloorMaterial ~= Enum.Material.Air then
+			if not h:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
+				h:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+			end
+			if h.UseJumpPower then
+				if h.JumpPower < 1 then h.JumpPower = 50 end
+			elseif h.JumpHeight < 1 then
+				h.JumpHeight = 7.2
+			end
+			h.Jump = true
+			h:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
 		if Flags.freeze then
 			if not r.Anchored then r.Anchored = true end
 			frozen = true
@@ -3537,9 +3569,6 @@ Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default
 	writeTheme(v)
 	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
 end })
-Menu:AddSlider("ui_scale", { Text = "UI Scale", Min = 50, Max = 200, Default = 100, Suffix = "%",
-	Tooltip = "Makes the whole menu bigger or smaller. It always fits your screen, whatever you pick",
-	Callback = function(v) Library:SetScale(v / 100) end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer", "This is what a role alert looks like.", 5)

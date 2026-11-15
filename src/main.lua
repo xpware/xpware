@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.2.0"
+local VERSION = "1.3.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -1785,7 +1785,21 @@ do
 			spinning = false
 			h.AutoRotate = true
 		end
-		if Flags.jump_spam and h.FloorMaterial ~= Enum.Material.Air then h.Jump = true end
+		-- Jump spam: grounded, and not seated, pinned or mid-fling. Setting Humanoid.Jump alone is
+		-- easily ignored or blocked, so ask for the jump both ways (the flag and the state change),
+		-- and switch jumping back on if the game turned it off or set the power to 0.
+		if Flags.jump_spam and not busy and not h.Sit and not h.PlatformStand and h.FloorMaterial ~= Enum.Material.Air then
+			if not h:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
+				h:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+			end
+			if h.UseJumpPower then
+				if h.JumpPower < 1 then h.JumpPower = 50 end
+			elseif h.JumpHeight < 1 then
+				h.JumpHeight = 7.2
+			end
+			h.Jump = true
+			h:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
 		if Flags.freeze then
 			if not r.Anchored then r.Anchored = true end
 			frozen = true
@@ -1849,9 +1863,6 @@ Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default
 	writeTheme(v)
 	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
 end })
-Menu:AddSlider("ui_scale", { Text = "UI Scale", Min = 50, Max = 200, Default = 100, Suffix = "%",
-	Tooltip = "Makes the whole menu bigger or smaller. It always fits your screen, whatever you pick",
-	Callback = function(v) Library:SetScale(v / 100) end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer", "This is what a role alert looks like.", 5)
