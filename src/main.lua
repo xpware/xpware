@@ -2,8 +2,8 @@
 	xpware - Murder Mystery 2
 	Engine: Roblox client (executor)  |  Language: Luau
 
-	Built tab by tab. Done: ESP, Teleport (incl. dropped gun), Combat, master switches.
-	Everything else is still a stub.
+	Every tab is built. Each tab after Teleport lives in its own do ... end block:
+	the main chunk can only hold 200 live locals.
 	Where the library comes from:
 	  - bundled by build.ps1: `Library` is defined above this file
 	  - Roblox Studio: ReplicatedStorage.xpware.xpui ModuleScript
@@ -32,8 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.9.3"
-local function stub() end
+local VERSION = "1.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -440,6 +439,12 @@ local function findRole(role)
 	end
 end
 local function findSheriff() return findRole("Sheriff") or findRole("Hero") end
+-- like findRole, but counts you too (role labels, announcements)
+local function anyoneWith(role)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if inRound(p) and roleOf(p) == role then return p end
+	end
+end
 
 -- the map streams in, so ask the server to load the destination before we land there
 local function streamTo(pos)
@@ -566,7 +571,8 @@ local EspItems = ESP:AddGroup("Items", "Right")
 EspItems:AddToggle("gun_esp", { Text = "Dropped Gun", Default = true })
 EspItems:AddToggle("coin_esp", { Text = "Coins", Callback = function(v) if not v then clearCoinEsp() end end })
 
-local busy = false -- true while Kill All (and later, fling) is driving the character
+local busy = false        -- true while a fling is driving the character
+local forceNoclip = false -- the coin farm turns on noclip through this while it glides
 
 ------------------------------------------------------------------------
 -- Combat. Names and arguments come from a remote capture:
@@ -963,103 +969,497 @@ end
 ------------------------------------------------------------------------
 -- Trolling
 ------------------------------------------------------------------------
-local Trolling = Window:AddTab("Trolling")
+do
+	local Trolling = Window:AddTab("Trolling")
 
-local Target = Trolling:AddGroup("Target", "Left")
-local trollTarget = Target:AddDropdown("troll_target", { Text = "Player", Values = otherNames(), Callback = stub })
-Target:AddToggle("spectate", { Text = "Spectate", Callback = stub })
-Target:AddToggle("follow", { Text = "Follow", Callback = stub })
-Target:AddToggle("orbit", { Text = "Orbit", Callback = stub })
-Target:AddSlider("orbit_speed", { Text = "Orbit Speed", Min = 1, Max = 20, Default = 5, Callback = stub })
-Target:AddSlider("orbit_radius", { Text = "Orbit Radius", Min = 3, Max = 20, Default = 6, Suffix = " studs", Callback = stub })
+	local function target() return findPlayer(Flags.troll_target) end
 
-local Fling = Trolling:AddGroup("Fling", "Right")
-Fling:AddButton({ Text = "Fling Target", Callback = stub })
-Fling:AddButton({ Text = "Fling Murderer", Callback = stub })
-Fling:AddButton({ Text = "Fling Sheriff", Callback = stub })
+	-- spin-fling: our root spins hard while it sits inside theirs, and the collision throws them.
+	-- busy pauses follow/orbit, noclip and anti-fling meanwhile, which would all get in the way.
+	local function fling(p, label)
+		if busy then return end
+		local me, tr = myRoot(), rootOf(p)
+		if not tr then notify(label .. " not found.") return end
+		if not me then notify("You don't have a character right now.") return end
+		busy = true
+		local home = me.CFrame
+		local spin = Instance.new("BodyAngularVelocity")
+		spin.MaxTorque = Vector3.new(0, math.huge, 0)
+		spin.P = math.huge
+		spin.AngularVelocity = Vector3.new(0, 9e5, 0)
+		spin.Parent = me
+		pcall(function()
+			local t0 = os.clock()
+			while running() and os.clock() - t0 < 2.5 and tr.Parent and isAlive(p) and myRoot() == me do
+				if tr.AssemblyLinearVelocity.Magnitude > 400 then break end -- they're gone
+				me.CFrame = CFrame.new(tr.Position + tr.AssemblyLinearVelocity * 0.12)
+				me.AssemblyLinearVelocity = Vector3.zero
+				RunService.Heartbeat:Wait()
+			end
+		end)
+		spin:Destroy()
+		if me.Parent then
+			me.AssemblyAngularVelocity = Vector3.zero
+			me.AssemblyLinearVelocity = Vector3.zero
+			teleport(home, true)
+			local h = myHum()
+			if h then h:ChangeState(Enum.HumanoidStateType.GettingUp) end
+		end
+		busy = false
+	end
 
-local Chat = Trolling:AddGroup("Chat", "Right")
-Chat:AddButton({ Text = "Announce Roles In Chat", Callback = stub })
+	local function chat(msg)
+		local sent = pcall(function()
+			local channels = game:GetService("TextChatService"):FindFirstChild("TextChannels")
+			local general = channels and channels:FindFirstChild("RBXGeneral")
+			assert(general, "no RBXGeneral channel")
+			general:SendAsync(msg)
+		end)
+		if sent then return true end
+		return (pcall(function() -- older games still use the legacy chat
+			ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+		end))
+	end
 
--- keep both player dropdowns in sync with who's in the server
-local function refreshPlayerLists()
-	local names = otherNames()
-	tpTarget:SetValues(names)
-	trollTarget:SetValues(names)
+	local function announceRoles()
+		local m = anyoneWith("Murderer")
+		local s = anyoneWith("Sheriff") or anyoneWith("Hero")
+		if not (m or s) then notify("Roles aren't known yet.") return end
+		local msg = string.format("Murderer: %s | Sheriff: %s", m and m.DisplayName or "?", s and s.DisplayName or "?")
+		if not chat(msg) then notify("Couldn't send the chat message.") end
+	end
+
+	-- spectate: the camera follows the target until it's turned off, then comes back to you
+	local spectating = false
+	local function stopSpectate()
+		if not spectating then return end
+		spectating = false
+		local h = myHum()
+		if h then cam().CameraSubject = h end
+	end
+	onUnload(stopSpectate)
+	on(RunService.RenderStepped, function()
+		local th = humOf(target())
+		if Flags.spectate and th then
+			if cam().CameraSubject ~= th then cam().CameraSubject = th end
+			spectating = true
+		else
+			stopSpectate()
+		end
+	end)
+
+	-- follow / orbit (orbit wins if both are on)
+	local orbitAngle = 0
+	on(RunService.Heartbeat, function(dt)
+		if busy or not (Flags.follow or Flags.orbit) then return end
+		local me, tr = myRoot(), rootOf(target())
+		if not (me and tr) then return end
+		if Flags.orbit then
+			orbitAngle += dt * (Flags.orbit_speed or 5) * 0.6
+			local pos = tr.Position + Vector3.new(math.cos(orbitAngle), 0, math.sin(orbitAngle)) * (Flags.orbit_radius or 6)
+			me.CFrame = CFrame.lookAt(pos, tr.Position)
+		else
+			me.CFrame = tr.CFrame * CFrame.new(0, 0, 3)
+		end
+		me.AssemblyLinearVelocity = Vector3.zero
+	end)
+
+	local TargetBox = Trolling:AddGroup("Target", "Left")
+	local trollTarget = TargetBox:AddDropdown("troll_target", { Text = "Player", Values = otherNames() })
+	TargetBox:AddToggle("spectate", { Text = "Spectate", Tooltip = "Your camera follows the target" })
+	TargetBox:AddToggle("follow", { Text = "Follow", Tooltip = "Stick right behind the target" })
+	TargetBox:AddToggle("orbit", { Text = "Orbit", Tooltip = "Circle around the target (wins over Follow)" })
+	TargetBox:AddSlider("orbit_speed", { Text = "Orbit Speed", Min = 1, Max = 20, Default = 5 })
+	TargetBox:AddSlider("orbit_radius", { Text = "Orbit Radius", Min = 3, Max = 20, Default = 6, Suffix = " studs" })
+
+	local FlingBox = Trolling:AddGroup("Fling", "Right")
+	FlingBox:AddButton({ Text = "Fling Target", Callback = function()
+		local p = target()
+		if p then fling(p, "Target") else notify("Pick a target first.") end
+	end })
+	FlingBox:AddButton({ Text = "Fling Murderer", Callback = function() fling(findRole("Murderer"), "Murderer") end })
+	FlingBox:AddButton({ Text = "Fling Sheriff", Callback = function() fling(findSheriff(), "Sheriff") end })
+
+	local ChatBox = Trolling:AddGroup("Chat", "Right")
+	ChatBox:AddButton({ Text = "Announce Roles In Chat", Tooltip = "Says who the murderer and sheriff are in chat", Callback = announceRoles })
+
+	-- keep both player dropdowns in sync with who's in the server
+	local function refreshPlayerLists()
+		local names = otherNames()
+		tpTarget:SetValues(names)
+		trollTarget:SetValues(names)
+	end
+	on(Players.PlayerAdded, refreshPlayerLists)
+	on(Players.PlayerRemoving, function(p)
+		removeEsp(p)
+		task.defer(refreshPlayerLists)
+	end)
 end
-on(Players.PlayerAdded, refreshPlayerLists)
-on(Players.PlayerRemoving, function(p)
-	removeEsp(p)
-	task.defer(refreshPlayerLists)
-end)
 
 ------------------------------------------------------------------------
 -- Player
 ------------------------------------------------------------------------
-local PlayerTab = Window:AddTab("Player")
+do
+	local PlayerTab = Window:AddTab("Player")
+	local DEFAULT_SPEED, DEFAULT_JUMP = 16, 50
 
-local Movement = PlayerTab:AddGroup("Movement", "Left")
-Movement:AddSlider("walkspeed", { Text = "WalkSpeed", Min = 16, Max = 100, Default = 16, Callback = stub })
-Movement:AddSlider("jumppower", { Text = "JumpPower", Min = 50, Max = 200, Default = 50, Callback = stub })
-Movement:AddToggle("inf_jump", { Text = "Infinite Jump", Callback = stub })
-Movement:AddToggle("noclip", { Text = "Noclip", Callback = stub })
-Movement:AddToggle("anti_fling", { Text = "Anti Fling", Tooltip = "Other players can't push or fling you", Callback = stub })
+	-- only overridden while a slider is off its default, so the game is left alone otherwise
+	on(RunService.Heartbeat, function()
+		local h = myHum()
+		if not h then return end
+		local ws, jp = Flags.walkspeed or DEFAULT_SPEED, Flags.jumppower or DEFAULT_JUMP
+		if ws ~= DEFAULT_SPEED and h.WalkSpeed ~= ws then h.WalkSpeed = ws end
+		if jp ~= DEFAULT_JUMP and (not h.UseJumpPower or h.JumpPower ~= jp) then
+			h.UseJumpPower = true
+			h.JumpPower = jp
+		end
+	end)
 
-local Fly = PlayerTab:AddGroup("Fly", "Right")
-Fly:AddToggle("fly", { Text = "Fly", Tooltip = "WASD, Space up, Ctrl down", Callback = stub })
-Fly:AddKeybind("fly_key", { Text = "Fly Key", Default = Enum.KeyCode.F, Callback = stub })
-Fly:AddSlider("fly_speed", { Text = "Fly Speed", Min = 10, Max = 150, Default = 50, Callback = stub })
+	on(UIS.JumpRequest, function()
+		if not Flags.inf_jump then return end
+		local h = myHum()
+		if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end)
+
+	-- noclip (also used by the coin farm through forceNoclip). Paused during a fling: it needs collisions.
+	local noclipped = {}
+	local function restoreCollisions()
+		for part in pairs(noclipped) do
+			if part.Parent then part.CanCollide = true end
+		end
+		noclipped = {}
+	end
+	on(RunService.Stepped, function()
+		local c = LP.Character
+		if (Flags.noclip or forceNoclip) and not busy and c then
+			for _, part in ipairs(c:GetDescendants()) do
+				if part:IsA("BasePart") and part.CanCollide then
+					noclipped[part] = true
+					part.CanCollide = false
+				end
+			end
+		elseif next(noclipped) then
+			restoreCollisions()
+		end
+	end)
+	onUnload(restoreCollisions)
+	on(LP.CharacterAdded, function() noclipped = {} end)
+
+	-- anti fling: other players' parts can't collide with us, so they can't push or fling us
+	on(RunService.Stepped, function()
+		if not Flags.anti_fling or busy then return end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LP and p.Character then
+				for _, part in ipairs(p.Character:GetDescendants()) do
+					if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
+				end
+			end
+		end
+	end)
+
+	local Movement = PlayerTab:AddGroup("Movement", "Left")
+	Movement:AddSlider("walkspeed", { Text = "WalkSpeed", Min = 16, Max = 100, Default = 16, Callback = function(v)
+		local h = myHum(); if h then h.WalkSpeed = v end
+	end })
+	Movement:AddSlider("jumppower", { Text = "JumpPower", Min = 50, Max = 200, Default = 50, Callback = function(v)
+		local h = myHum(); if h then h.UseJumpPower = true; h.JumpPower = v end
+	end })
+	Movement:AddToggle("inf_jump", { Text = "Infinite Jump", Tooltip = "Jump again in mid-air" })
+	Movement:AddToggle("noclip", { Text = "Noclip", Tooltip = "Walk through walls" })
+	Movement:AddToggle("anti_fling", { Text = "Anti Fling", Tooltip = "Other players can't push or fling you" })
+end
 
 ------------------------------------------------------------------------
 -- Misc
 ------------------------------------------------------------------------
-local Misc = Window:AddTab("Misc")
+do
+	local Misc = Window:AddTab("Misc")
+	local TeleportService = game:GetService("TeleportService")
+	local GuiService = game:GetService("GuiService")
 
-local Roles = Misc:AddGroup("Roles", "Left")
-Roles:AddToggle("role_notify", { Text = "Role Notifier", Default = true, Callback = stub })
-local murdererLabel = Roles:AddLabel("Murderer: -")
-local sheriffLabel = Roles:AddLabel("Sheriff: -")
-local myRoleLabel = Roles:AddLabel("You: -")
+	local RolesBox = Misc:AddGroup("Roles", "Left")
+	RolesBox:AddToggle("role_notify", { Text = "Role Notifier", Default = true, Tooltip = "Tells you who the murderer and sheriff are each round" })
+	local murdererLabel = RolesBox:AddLabel("Murderer: -")
+	local sheriffLabel = RolesBox:AddLabel("Sheriff: -")
+	local myRoleLabel = RolesBox:AddLabel("You: -")
 
-local Server = Misc:AddGroup("Server", "Right")
-Server:AddToggle("anti_afk", { Text = "Anti AFK", Default = true, Callback = stub })
-Server:AddToggle("auto_rejoin", { Text = "Auto Rejoin On Kick", Callback = stub })
-Server:AddButton({ Text = "Rejoin Server", Callback = stub })
-Server:AddButton({ Text = "Server Hop", Callback = stub })
-Server:AddButton({ Text = "Copy Server ID", Callback = stub })
+	local announced = {}
+	task.spawn(function()
+		while running() do
+			local m = anyoneWith("Murderer")
+			local s = anyoneWith("Sheriff") or anyoneWith("Hero")
+			murdererLabel:Set("Murderer: " .. (m and m.DisplayName or "-"))
+			sheriffLabel:Set("Sheriff: " .. (s and s.DisplayName or "-"))
+			myRoleLabel:Set("You: " .. (inRound(LP) and roleOf(LP) or "-"))
+			if not m then announced = {} end -- between rounds, so the next round's roles get announced
+			if Flags.role_notify then
+				if m and announced.m ~= m then
+					announced.m = m
+					notify(m == LP and "You're the murderer." or (m.DisplayName .. " is the murderer."), "Murderer", 6)
+				end
+				if s and announced.s ~= s then
+					announced.s = s
+					local r = roleOf(s)
+					notify(s == LP and ("You're the " .. r:lower() .. ".") or (s.DisplayName .. " is the " .. r:lower() .. "."), r, 6)
+				end
+			end
+			task.wait(0.5)
+		end
+	end)
+
+	local function rejoin()
+		pcall(function()
+			if #Players:GetPlayers() <= 1 then
+				TeleportService:Teleport(game.PlaceId, LP)
+			else
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+			end
+		end)
+	end
+
+	local function serverHop()
+		local ok, body = pcall(function()
+			return game:HttpGet(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100"):format(game.PlaceId))
+		end)
+		if not ok then notify("Couldn't get the server list.") return end
+		local okJson, data = pcall(function() return HttpService:JSONDecode(body) end)
+		local ids = {}
+		if okJson and type(data) == "table" and type(data.data) == "table" then
+			for _, srv in ipairs(data.data) do
+				local playing, max = tonumber(srv.playing), tonumber(srv.maxPlayers)
+				if srv.id ~= game.JobId and playing and max and playing < max then table.insert(ids, srv.id) end
+			end
+		end
+		if #ids == 0 then notify("No other servers with space right now.") return end
+		notify("Hopping servers...")
+		pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, ids[math.random(#ids)], LP) end)
+	end
+
+	on(LP.Idled, function()
+		if not Flags.anti_afk then return end
+		pcall(function()
+			local vu = game:GetService("VirtualUser")
+			vu:CaptureController()
+			vu:ClickButton2(Vector2.new())
+		end)
+	end)
+
+	local rejoining = false
+	on(GuiService.ErrorMessageChanged, function(msg)
+		if not Flags.auto_rejoin or rejoining or not msg or msg == "" then return end
+		rejoining = true
+		notify("Disconnected, rejoining...")
+		task.wait(2)
+		rejoin()
+		rejoining = false
+	end)
+
+	local ServerBox = Misc:AddGroup("Server", "Right")
+	ServerBox:AddToggle("anti_afk", { Text = "Anti AFK", Default = true, Tooltip = "Stops Roblox kicking you for being idle" })
+	ServerBox:AddToggle("auto_rejoin", { Text = "Auto Rejoin On Kick", Tooltip = "Rejoins the same server if you get disconnected" })
+	ServerBox:AddButton({ Text = "Rejoin Server", Callback = rejoin })
+	ServerBox:AddButton({ Text = "Server Hop", Tooltip = "Joins a different server with space", Callback = serverHop })
+	ServerBox:AddButton({ Text = "Copy Server ID", Callback = function()
+		if typeof(setclipboard) == "function" then
+			setclipboard(game.JobId)
+			notify("Server ID copied.")
+		else
+			notify("Your executor can't copy to the clipboard.")
+		end
+	end })
+end
 
 ------------------------------------------------------------------------
 -- Autofarm
 ------------------------------------------------------------------------
-local Autofarm = Window:AddTab("Autofarm")
-Autofarm:AddMasterToggle("autofarm_enabled", { Text = "Autofarm", Default = true, Tooltip = "Master switch for every autofarm feature" })
+do
+	local Autofarm = Window:AddTab("Autofarm")
+	local TweenService = game:GetService("TweenService")
+	Autofarm:AddMasterToggle("autofarm_enabled", { Text = "Autofarm", Default = true, Tooltip = "Master switch for every autofarm feature" })
 
-local Coins = Autofarm:AddGroup("Coins", "Left")
-Coins:AddToggle("coin_farm", { Text = "Auto Collect Coins", Callback = stub })
-Coins:AddSlider("farm_speed", { Text = "Farm Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Higher is faster but easier to get kicked for", Callback = stub })
-Coins:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Callback = stub })
-Coins:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs", Callback = stub })
-Coins:AddToggle("reset_full", { Text = "Reset When Bag Full", Callback = stub })
-Coins:AddSlider("bag_size", { Text = "Bag Size", Min = 10, Max = 50, Default = 40, Tooltip = "40 normally, 50 with Elite", Callback = stub })
-local coinLabel = Coins:AddLabel("Collected this round: 0")
+	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
+	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Glides you from coin to coin through walls" })
+	CoinsBox:AddSlider("farm_speed", { Text = "Farm Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Higher is faster but easier to get kicked for" })
+	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer" })
+	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
+	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
+	CoinsBox:AddSlider("bag_size", { Text = "Bag Size", Min = 10, Max = 50, Default = 40, Tooltip = "40 normally, 50 with Elite" })
+	local coinLabel = CoinsBox:AddLabel("Collected this round: 0")
+
+	-- the game's own per-round count when it's in the player data, otherwise our own tally
+	local localCount = 0
+	local function coinsHeld()
+		local d = dataOf(LP)
+		return (d and tonumber(d.Coins)) or localCount
+	end
+
+	local function nextCoin(me)
+		local murderer = Flags.avoid_murderer and roleOf(LP) ~= "Murderer" and findRole("Murderer")
+		local mr = murderer and rootOf(murderer)
+		local radius = Flags.avoid_radius or 25
+		local best, bestDist
+		for _, coin in ipairs(liveCoins()) do
+			if not mr or (coin.Position - mr.Position).Magnitude > radius then
+				local d = (coin.Position - me.Position).Magnitude
+				if not bestDist or d < bestDist then best, bestDist = coin, d end
+			end
+		end
+		return best
+	end
+
+	local function stillFarming() return running() and Flags.autofarm_enabled and Flags.coin_farm and not busy end
+
+	-- glide to the nearest coin and stay on it until it's collected. Returns false if there was none.
+	local function farmStep()
+		local me = myRoot()
+		if not me then return false end
+		local coin = nextCoin(me)
+		if not coin then return false end
+		forceNoclip = true
+		local speed = 10 + (Flags.farm_speed or 4) * 3
+		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / speed, Enum.EasingStyle.Linear),
+			{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
+		tw:Play()
+		while tw.PlaybackState == Enum.PlaybackState.Playing do
+			if not (stillFarming() and isCoinLive(coin) and me.Parent) then tw:Cancel() break end
+			me.AssemblyLinearVelocity = Vector3.zero
+			task.wait()
+		end
+		if isCoinLive(coin) and me.Parent and stillFarming() then
+			if typeof(firetouchinterest) == "function" then
+				pcall(firetouchinterest, me, coin, 0)
+				pcall(firetouchinterest, me, coin, 1)
+			end
+			-- hold still on the coin (noclip is on, so we'd otherwise sink through the floor)
+			local t0 = os.clock()
+			while isCoinLive(coin) and me.Parent and os.clock() - t0 < 0.5 do
+				me.CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation
+				me.AssemblyLinearVelocity = Vector3.zero
+				task.wait()
+			end
+		end
+		if not isCoinLive(coin) then localCount += 1 end
+		return true
+	end
+
+	task.spawn(function()
+		while running() do
+			if stillFarming() and inRound(LP) then
+				local ok, moved = pcall(farmStep)
+				if not ok then warn("[xpware] coin farm: " .. tostring(moved)) end
+				if not (ok and moved) then
+					forceNoclip = false
+					task.wait(0.3)
+				end
+				if Flags.reset_full and coinsHeld() >= (Flags.bag_size or 40) then
+					forceNoclip = false
+					local h = myHum()
+					if h and h.Health > 0 then
+						h.Health = 0
+						notify("Bag full, resetting.", "Autofarm", 3)
+					end
+				end
+			else
+				forceNoclip = false
+				if not inRound(LP) then localCount = 0 end
+				task.wait(0.3)
+			end
+			coinLabel:Set("Collected this round: " .. coinsHeld())
+		end
+	end)
+	onUnload(function() forceNoclip = false end)
+end
 
 ------------------------------------------------------------------------
 -- Fun
 ------------------------------------------------------------------------
-local Fun = Window:AddTab("Fun")
+do
+	local Fun = Window:AddTab("Fun")
 
-local Character = Fun:AddGroup("Character", "Left")
-Character:AddToggle("spin", { Text = "Spin", Callback = stub })
-Character:AddSlider("spin_speed", { Text = "Spin Speed", Min = 1, Max = 50, Default = 10, Callback = stub })
-Character:AddToggle("jump_spam", { Text = "Jump Spam", Callback = stub })
-Character:AddToggle("freeze", { Text = "Freeze In Place", Callback = stub })
-Character:AddButton({ Text = "Sit", Callback = stub })
+	-- the default Animate script keeps these; a character without them just gets a notice
+	local EMOTES = {
+		["Dance"]   = { "dance", "Animation1" },
+		["Dance 2"] = { "dance2", "Animation1" },
+		["Dance 3"] = { "dance3", "Animation1" },
+		["Wave"]    = { "wave", "WaveAnim" },
+		["Point"]   = { "point", "PointAnim" },
+		["Cheer"]   = { "cheer", "CheerAnim" },
+		["Laugh"]   = { "laugh", "LaughAnim" },
+	}
+	local EMOTE_ORDER = { "Dance", "Dance 2", "Dance 3", "Wave", "Point", "Cheer", "Laugh" }
 
-local Emotes = Fun:AddGroup("Emotes", "Right")
-Emotes:AddDropdown("emote", { Text = "Emote", Values = { "Dance", "Dance 2", "Dance 3", "Wave", "Point", "Cheer", "Laugh" }, Default = "Dance", Callback = stub })
-Emotes:AddButton({ Text = "Play Emote", Callback = stub })
-Emotes:AddButton({ Text = "Stop Emote", Callback = stub })
-Emotes:AddLabel("Walking cancels the emote.", { Color = Library.Theme.TextDim })
+	local emoteTrack
+	local function stopEmote()
+		if emoteTrack then pcall(function() emoteTrack:Stop() end) end
+		emoteTrack = nil
+	end
+	onUnload(stopEmote)
+
+	local function playEmote(name)
+		local c, h = LP.Character, myHum()
+		local e = EMOTES[name]
+		if not (c and h and e) then return end
+		local animate = c:FindFirstChild("Animate")
+		local holder = animate and animate:FindFirstChild(e[1])
+		local anim = holder and (holder:FindFirstChild(e[2]) or holder:FindFirstChildOfClass("Animation"))
+		if not anim then notify("This character has no " .. name .. " animation.") return end
+		stopEmote()
+		local ok, track = pcall(function()
+			local animator = h:FindFirstChildOfClass("Animator") or h
+			return animator:LoadAnimation(anim)
+		end)
+		if not ok then notify("Couldn't play that emote.") return end
+		emoteTrack = track
+		emoteTrack.Priority = Enum.AnimationPriority.Action
+		emoteTrack:Play()
+	end
+
+	local spinning, frozen = false, false
+	on(RunService.Heartbeat, function(dt)
+		local r, h = myRoot(), myHum()
+		if not (r and h) then return end
+		if Flags.spin and not busy then
+			spinning = true
+			h.AutoRotate = false
+			r.CFrame *= CFrame.Angles(0, (Flags.spin_speed or 10) * 2 * dt, 0)
+		elseif spinning then
+			spinning = false
+			h.AutoRotate = true
+		end
+		if Flags.jump_spam and h.FloorMaterial ~= Enum.Material.Air then h.Jump = true end
+		if Flags.freeze then
+			if not r.Anchored then r.Anchored = true end
+			frozen = true
+		elseif frozen then
+			r.Anchored = false
+			frozen = false
+		end
+		if emoteTrack and h.MoveDirection.Magnitude > 0 then stopEmote() end
+	end)
+	on(LP.CharacterAdded, function()
+		spinning, frozen, emoteTrack = false, false, nil
+	end)
+	onUnload(function()
+		local r, h = myRoot(), myHum()
+		if r and frozen then r.Anchored = false end
+		if h and spinning then h.AutoRotate = true end
+	end)
+
+	local CharacterBox = Fun:AddGroup("Character", "Left")
+	CharacterBox:AddToggle("spin", { Text = "Spin" })
+	CharacterBox:AddSlider("spin_speed", { Text = "Spin Speed", Min = 1, Max = 50, Default = 10 })
+	CharacterBox:AddToggle("jump_spam", { Text = "Jump Spam" })
+	CharacterBox:AddToggle("freeze", { Text = "Freeze In Place", Tooltip = "Pins you where you stand" })
+	CharacterBox:AddButton({ Text = "Sit", Callback = function()
+		local h = myHum(); if h then h.Sit = true end
+	end })
+
+	local EmotesBox = Fun:AddGroup("Emotes", "Right")
+	EmotesBox:AddDropdown("emote", { Text = "Emote", Values = EMOTE_ORDER, Default = "Dance" })
+	EmotesBox:AddButton({ Text = "Play Emote", Callback = function() playEmote(Flags.emote) end })
+	EmotesBox:AddButton({ Text = "Stop Emote", Callback = stopEmote })
+	EmotesBox:AddLabel("Walking cancels the emote.", { Color = Library.Theme.TextDim })
+end
 
 ------------------------------------------------------------------------
 -- Settings (menu controls are UI, so they actually work)
@@ -1084,7 +1484,7 @@ Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default
 end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
-	Library:Notify("Murderer found", "This is what a role alert will look like once the features are in.", 5)
+	Library:Notify("Murderer", "This is what a role alert looks like.", 5)
 end })
 Menu:AddButton({ Text = "Unload", Callback = function() Library:Unload() end })
 
@@ -1098,9 +1498,6 @@ About:AddLabel("Murder Mystery 2", { Color = Library.Theme.TextDim })
 About:AddDivider()
 About:AddLabel("X and _ shrink the window into a small bar. Click the bar to open it again. Unload stops the script.")
 
--- labels the role/farm features will drive later
-local _ = { murdererLabel, sheriffLabel, myRoleLabel, coinLabel }
-
 ------------------------------------------------------------------------
 -- Settings persistence: every control saves to xpware/mm2.json when it changes and loads on start
 ------------------------------------------------------------------------
@@ -1111,7 +1508,7 @@ local canSave = typeof(writefile) == "function" and typeof(readfile) == "functio
 -- session-only state: restoring these would teleport you, lock onto an old target, or float you
 local NO_SAVE = {
 	tp_target = true, troll_target = true, safe_spot = true,
-	spectate = true, follow = true, orbit = true, fly = true, freeze = true,
+	spectate = true, follow = true, orbit = true, freeze = true,
 	theme = true, -- lives in theme.txt so it can be applied before the window exists
 }
 
