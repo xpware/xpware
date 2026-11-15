@@ -1738,7 +1738,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.6.0"
+local VERSION = "1.7.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3616,7 +3616,8 @@ end
 -- Remotes.Inventory.InventoryDataChanged fires with (category, item, amount). Those are the two
 -- steps its own code takes when the server sends a new item, so that's all this does. Nothing is
 -- sent to the server: nobody else sees any of it, and trades use your real inventory. Equipping a
--- knife or gun also welds its model onto the one you hold (see "In-hand skins").
+-- knife or gun also welds its model onto the one you hold, or onto a local copy in your backpack when
+-- you have none (see "In-hand skins").
 ------------------------------------------------------------------------
 do
 	local InventoryTab = Window:AddTab("Inventory")
@@ -3740,9 +3741,13 @@ do
 	local skinChoice = {} -- "Knife" / "Gun" -> the item chosen
 	local modelCache = {} -- ItemID -> the loaded model, so each skin is fetched once
 	local skinned = {}    -- tools wearing a skin right now
+	local modelFail = {}  -- ItemID -> why its model couldn't load, so we don't retry every half second
+	local FAKE = "xpware_fake" -- marks a local stand-in weapon we made for you (value: "Knife" / "Gun")
 
 	local function weaponType(tool)
 		if not tool:IsA("Tool") then return nil end
+		local fake = tool:GetAttribute(FAKE)
+		if fake then return fake end
 		if tool:HasTag("Weapon_Knife") or tool.Name == "Knife" then return "Knife" end
 		if tool:HasTag("Weapon_Gun") or tool.Name == "Gun" then return "Gun" end
 		return nil
@@ -3764,15 +3769,20 @@ do
 		local id = entry.info.ItemID
 		if not id then return nil, "that item has no model" end
 		if modelCache[id] then return modelCache[id] end
+		if modelFail[id] then return nil, modelFail[id] end
 		local ok, objects = pcall(function() return game:GetObjects("rbxassetid://" .. tostring(id)) end)
 		local root = ok and type(objects) == "table" and objects[1]
-		if not root then return nil, "its model couldn't be loaded (it may be private, or your executor can't load models)" end
+		if not root then
+			modelFail[id] = "its model couldn't be loaded (it may be private, or your executor can't load models)"
+			return nil, modelFail[id]
+		end
 		local tool = root:IsA("Tool") and root or root:FindFirstChildWhichIsA("Tool", true)
 		local container = tool or root
 		local handle = container:FindFirstChild("Handle") or container:FindFirstChild("Handle", true)
 		if not (handle and handle:IsA("BasePart")) then
 			root:Destroy()
-			return nil, "its model has no handle"
+			modelFail[id] = "its model has no handle"
+			return nil, modelFail[id]
 		end
 		local parts = {}
 		for _, d in ipairs(container:GetDescendants()) do
@@ -3793,6 +3803,10 @@ do
 		if not (handle and handle:IsA("BasePart")) then return false, "the weapon has no handle yet" end
 		local skin, why = loadSkin(entry)
 		if not skin then return false, why end
+		if tool:GetAttribute(FAKE) then
+			tool.Grip = skin.grip -- so the skin sits in the hand exactly as its own model does
+			tool.Name = (entry.name == "Knife" or entry.name == "Gun") and (entry.name .. " ") or entry.name
+		end
 
 		local holder = Instance.new("Model")
 		holder.Name = SKIN
@@ -3836,12 +3850,53 @@ do
 		return list
 	end
 
+	-- Outside a round you have no knife or gun, so there'd be nothing to dress. Then we put a local stand-in
+	-- in your backpack: tagged like the real thing so the game's own Knife / Gun buttons equip it, but
+	-- named differently so this script's role checks don't mistake it for the real weapon. The moment the
+	-- server gives you the real one, the stand-in goes.
+	local function syncFakes()
+		for kind, entry in pairs(skinChoice) do
+			local real, fakes = false, {}
+			for _, w in ipairs(weaponTools()) do
+				if w.kind == kind then
+					if w.tool:GetAttribute(FAKE) then table.insert(fakes, w.tool) else real = true end
+				end
+			end
+			if real then
+				for _, t in ipairs(fakes) do skinned[t] = nil t:Destroy() end
+			elseif #fakes == 0 then
+				local backpack = LP:FindFirstChildOfClass("Backpack")
+				local skin = backpack and loadSkin(entry)
+				if skin then
+					local tool = Instance.new("Tool")
+					tool.Name = entry.name
+					tool.CanBeDropped = false
+					tool.RequiresHandle = true
+					tool:SetAttribute(FAKE, kind)
+					pcall(function() tool:AddTag("Weapon_" .. kind) end)
+					local handle = Instance.new("Part")
+					handle.Name = "Handle"
+					handle.Size = Vector3.new(1, 1, 1)
+					handle.Transparency = 1
+					handle.CanCollide, handle.CanTouch, handle.CanQuery, handle.Massless = false, false, false, true
+					handle.Parent = tool
+					tool.Parent = backpack
+				end
+			end
+		end
+	end
+
 	-- puts the chosen skin on every knife / gun you have, and takes it off any you've unchosen
 	local applying, pending = false, false
 	local function applySkins(report)
 		if applying then pending = true return end
 		applying = true
 		local problem
+		syncFakes()
+		for _, entry in pairs(skinChoice) do
+			local id = entry.info.ItemID
+			if not id then problem = "that item has no model" elseif modelFail[id] then problem = modelFail[id] end
+		end
 		for _, w in ipairs(weaponTools()) do
 			local entry = skinChoice[w.kind]
 			if entry then
@@ -3861,7 +3916,9 @@ do
 
 	local function clearAllSkins()
 		skinChoice = {}
-		for _, w in ipairs(weaponTools()) do clearSkin(w.tool) end
+		for _, w in ipairs(weaponTools()) do
+			if w.tool:GetAttribute(FAKE) then skinned[w.tool] = nil w.tool:Destroy() else clearSkin(w.tool) end
+		end
 		for tool in pairs(skinned) do clearSkin(tool) end
 	end
 
@@ -3871,13 +3928,17 @@ do
 		if kind and skinChoice[kind] then task.spawn(applySkins) end
 	end
 	on(LP.DescendantAdded, onWeaponAdded) -- the Backpack's contents
-	local function hookCharacter(char) on(char.ChildAdded, onWeaponAdded) end
+	local function hookCharacter(char)
+		on(char.ChildAdded, onWeaponAdded)
+		task.delay(1.5, function() if running() and next(skinChoice) then applySkins() end end)
+	end
 	if LP.Character then hookCharacter(LP.Character) end
 	on(LP.CharacterAdded, hookCharacter)
 
 	-- the server's own scripts may show the real handle again; keep it hidden
 	task.spawn(function()
 		while running() do
+			if next(skinChoice) then applySkins() end
 			for tool in pairs(skinned) do
 				if not tool.Parent then
 					skinned[tool] = nil
@@ -3977,12 +4038,9 @@ do
 		notify(string.format("Added %d items (you already had %d).", new, had), "Inventory", 4)
 	end
 
-	-- Equipping is local too: it sets what the game thinks is equipped and tells its equip screen. The
-	-- game's own Equip function also asks the server, which this deliberately never does.
-	local function equipSelected()
-		local e = selected()
-		if not e then return end
-		if e.dataCat ~= "Weapons" then notify("Only knives and guns can be equipped.") return end
+	-- Equipping is local too: it sets what the game thinks is equipped and tells its equip screen (the
+	-- same two steps the game's own EquipItem takes), but never sends the server anything.
+	local function equipEntry(e)
 		local profile = getProfile()
 		if not (profile and profile.Weapons and profile.Weapons.Equipped) then
 			notify("The game's inventory data isn't loaded yet.")
@@ -3996,7 +4054,46 @@ do
 		if ok and type(equip) == "table" and equip.EquippedChanged then equip.EquippedChanged:Fire(itemType, e.key) end
 		skinChoice[itemType] = e
 		notify(e.name .. " is shown as your equipped " .. itemType:lower() .. ".", "Inventory", 4)
-		applySkins(true) -- puts its skin on the one in your hand too, once its model has loaded
+		applySkins(true) -- dresses the one in your hand (or puts a copy in your backpack) once its model has loaded
+	end
+
+	local function equipSelected()
+		local e = selected()
+		if not e then return end
+		if e.dataCat ~= "Weapons" then notify("Only knives and guns can be equipped.") return end
+		equipEntry(e)
+	end
+
+	-- The game's own Equip button on an item you added would tell the server about an item you don't own.
+	-- So for items we added, that button is routed here instead; everything you really own goes through
+	-- the game's real function untouched.
+	do
+		local ok, svc = pcall(require, equipModule)
+		local realEquip = ok and type(svc) == "table" and svc.EquipItem
+		if type(realEquip) == "function" then
+			local function mine(category, key)
+				for _, e in ipairs(added) do
+					if e.dataCat == category and e.key == key then return e end
+				end
+			end
+			pcall(function() if isreadonly and isreadonly(svc) then setreadonly(svc, false) end end)
+			local hooked = pcall(function()
+				svc.EquipItem = function(self, category, key)
+					local e = mine(category, key)
+					if not e then return realEquip(self, category, key) end
+					if category == "Weapons" then
+						equipEntry(e)
+					else
+						local profile = getProfile()
+						if profile and profile[category] then profile[category].Equipped = { key } end
+						if svc.EquippedChanged then svc.EquippedChanged:Fire(category, key) end
+					end
+				end
+			end)
+			if hooked then
+				onUnload(function() pcall(function() svc.EquipItem = realEquip end) end)
+			end
+		end
 	end
 
 	local PickBox = InventoryTab:AddGroup("Pick An Item", "Left")
@@ -4013,7 +4110,7 @@ do
 	local AddBox = InventoryTab:AddGroup("Your Inventory", "Right")
 	AddBox:AddButton({ Text = "Add Item", Tooltip = "Puts the selected item in your inventory screen", Callback = addSelected })
 	AddBox:AddButton({ Text = "Add All Listed", Tooltip = "Adds every item in the list, including the search results", Callback = function() task.spawn(addAllShown) end })
-	AddBox:AddButton({ Text = "Equip Item (Knife / Gun)", Tooltip = "Shows it as your equipped knife or gun, and puts its skin on the weapon in your hand (your screen only)", Callback = equipSelected })
+	AddBox:AddButton({ Text = "Equip Item (Knife / Gun)", Tooltip = "Equips it: dresses your knife or gun, or puts a copy in your backpack when you have none (your screen only)", Callback = equipSelected })
 	AddBox:AddButton({ Text = "Show My Real Weapons", Tooltip = "Takes the skins off the knife and gun in your hand", Callback = function()
 		local profile = getProfile()
 		if profile then restoreEquipped(profile) end
@@ -4025,7 +4122,7 @@ do
 		local n = removeAdded()
 		notify(n > 0 and ("Removed " .. n .. " items.") or "Nothing to remove.", "Inventory", 3)
 	end })
-	AddBox:AddLabel("Only you see this. Equipping a knife or gun also dresses the one in your hand. Trades and your real weapon are unchanged. Equip added items with the button above, not the game's own Equip button.", { Color = Library.Theme.TextDim })
+	AddBox:AddLabel("Only you see this. Equip an added knife or gun here or with the game's own Equip button. It dresses the one in your hand, or lands in your backpack when you have none. Trades and your real weapon are unchanged.", { Color = Library.Theme.TextDim })
 
 	refreshList()
 end
