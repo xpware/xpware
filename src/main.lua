@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.1.1"
+local VERSION = "1.2.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -1849,6 +1849,9 @@ Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default
 	writeTheme(v)
 	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
 end })
+Menu:AddSlider("ui_scale", { Text = "UI Scale", Min = 50, Max = 200, Default = 100, Suffix = "%",
+	Tooltip = "Makes the whole menu bigger or smaller. It always fits your screen, whatever you pick",
+	Callback = function(v) Library:SetScale(v / 100) end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer", "This is what a role alert looks like.", 5)

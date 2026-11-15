@@ -29,6 +29,8 @@ local Library = {
 	_conns = {},
 	_popups = {},
 	_onUnload = {},
+	_scale = 1,     -- how much the whole UI is scaled up or down to suit the screen
+	_scaleMult = 1, -- the user's own multiplier (Settings > UI Scale)
 }
 
 -- re-executing the script replaces the old UI instead of stacking a second one
@@ -478,10 +480,12 @@ function Library:_tooltip(gui, text)
 		local my = token
 		task.delay(0.5, function()
 			if my ~= token or not self._tip or not gui.Parent then return end
+			-- screen pixels -> UI pixels: the whole UI is scaled
+			local s = self._scale
 			local rp = self._root.AbsolutePosition
 			local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
 			self._tip.Text = text
-			self._tip.Position = px(ap.X - rp.X + 12, ap.Y - rp.Y + as.Y + 4)
+			self._tip.Position = px((ap.X - rp.X) / s + 12, (ap.Y - rp.Y + as.Y) / s + 4)
 			self._tip.Visible = true
 		end)
 	end)
@@ -721,13 +725,15 @@ function Group:AddDropdown(flag, o)
 	connect(field.MouseButton1Click, function()
 		if open then Library:_closePopups() return end
 		rebuild()
+		-- screen pixels -> UI pixels: the whole UI is scaled
+		local s = Library._scale
 		local rp = Library._root.AbsolutePosition
 		local ap, as = field.AbsolutePosition, field.AbsoluteSize
-		listFrame.Position = px(ap.X - rp.X, ap.Y - rp.Y + as.Y + 1)
+		listFrame.Position = px((ap.X - rp.X) / s, (ap.Y - rp.Y + as.Y) / s + 1)
 		-- slides open like an XP menu
-		listFrame.Size = px(as.X, 0)
+		listFrame.Size = px(as.X / s, 0)
 		listFrame.Visible = true
-		TweenService:Create(listFrame, MENU_OPEN, { Size = px(as.X, math.max(1, math.min(#values, 8)) * 16) }):Play()
+		TweenService:Create(listFrame, MENU_OPEN, { Size = px(as.X / s, math.max(1, math.min(#values, 8)) * 16) }):Play()
 		open = true
 		Library:_openPopup(popup)
 	end)
@@ -952,6 +958,16 @@ function Library:PickTheme(opt)
 	})
 	new("TextButton", { Parent = win, Modal = true, BackgroundTransparency = 1, Size = px(1, 1) }) -- frees the mouse
 
+	-- fit any screen: 1080p is 1x, bigger screens scale up, smaller ones scale it down to fit
+	local pickScale = new("UIScale", { Parent = win })
+	local function fitPicker()
+		local v = gui.AbsoluteSize
+		if v.X < 100 or v.Y < 100 then return end -- the real size isn't known yet
+		pickScale.Scale = math.clamp(math.min(math.clamp(v.Y / 1080, 0.85, 2.5), (v.X - 16) / W, (v.Y - 16) / H), 0.3, 3)
+	end
+	fitPicker()
+	connect(gui:GetPropertyChangedSignal("AbsoluteSize"), fitPicker)
+
 	local titleBar = new("Frame", {
 		Parent = win, Size = ud(1, 0, 0, TITLE_H + 8), BackgroundColor3 = Theme.White,
 		corner(8), gradient(scaled(G.Title, TITLE_H / (TITLE_H + 8))),
@@ -1050,8 +1066,13 @@ function Library:CreateWindow(opt)
 	mount(gui)
 	self.Gui = gui
 
-	local root = new("Frame", { Parent = gui, Name = "Root", BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), ZIndex = 1 })
-	local overlay = new("Frame", { Parent = gui, Name = "Overlay", BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), ZIndex = 50 })
+	-- Everything sits inside `scaler`: a frame 1/s of the screen with a UIScale of s, so it fills the
+	-- screen exactly while every position and size inside is in "UI pixels" (screen pixels / s). The
+	-- whole UI scales together for any screen; applyScale at the bottom sets s.
+	local scaler = new("Frame", { Parent = gui, Name = "Scaler", BackgroundTransparency = 1, Size = ud(1, 0, 1, 0) })
+	local uiScale = new("UIScale", { Parent = scaler, Scale = 1 })
+	local root = new("Frame", { Parent = scaler, Name = "Root", BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), ZIndex = 1 })
+	local overlay = new("Frame", { Parent = scaler, Name = "Overlay", BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), ZIndex = 50 })
 	self._root, self._overlay = root, overlay
 
 	self._tip = new("TextLabel", {
@@ -1271,7 +1292,7 @@ function Library:CreateWindow(opt)
 	})
 
 	local function relPos(gui)
-		local rel = gui.AbsolutePosition - root.AbsolutePosition
+		local rel = (gui.AbsolutePosition - root.AbsolutePosition) / lib._scale
 		return px(math.floor(rel.X + 0.5), math.floor(rel.Y + 0.5))
 	end
 
@@ -1291,7 +1312,7 @@ function Library:CreateWindow(opt)
 
 	-- window -> bar: the bar takes the window's top-left, and the stand-in shrinks onto it
 	local function collapse()
-		local from, size = relPos(win), win.AbsoluteSize
+		local from, size = relPos(win), win.AbsoluteSize / lib._scale
 		mini.Position = from
 		ghost.Position, ghost.Size = from, px(size.X, size.Y)
 		ghost.Visible = true
@@ -1348,7 +1369,7 @@ function Library:CreateWindow(opt)
 			maximized = false
 		else
 			normalPos, normalSize = win.Position, win.Size
-			local s = root.AbsoluteSize
+			local s = gui.AbsoluteSize / lib._scale
 			goal = { Position = px(0, 0), Size = px(s.X, s.Y) }
 			maximized = true
 		end
@@ -1408,35 +1429,36 @@ function Library:CreateWindow(opt)
 		lastClick = now
 		if maximized then return end
 		dragging = true
-		local rel = win.AbsolutePosition - root.AbsolutePosition
-		dragStart, startPos = input.Position, px(rel.X, rel.Y)
+		dragStart, startPos = input.Position, relPos(win)
 	end)
 	connect(grip.InputBegan, function(input)
 		if isPress(input) and not maximized and not animating then
 			resizing = true
-			dragStart, startSize = input.Position, win.AbsoluteSize
+			dragStart, startSize = input.Position, win.AbsoluteSize / lib._scale
 		end
 	end)
 	connect(UIS.InputChanged, function(input)
 		if not isMove(input) then return end
+		-- the mouse moves in screen pixels; positions and sizes are in UI pixels
+		local sc = lib._scale
 		if dragging then
-			local d = input.Position - dragStart
-			local s = root.AbsoluteSize
+			local d = (input.Position - dragStart) / sc
+			local s = gui.AbsoluteSize / sc
 			-- keep the title bar out from under Roblox's own topbar buttons
-			local topInset = GuiService:GetGuiInset().Y
-			local x = math.clamp(startPos.X.Offset + d.X, -win.AbsoluteSize.X + 100, s.X - 100)
+			local topInset = GuiService:GetGuiInset().Y / sc
+			local x = math.clamp(startPos.X.Offset + d.X, -win.Size.X.Offset + 100, s.X - 100)
 			local y = math.clamp(startPos.Y.Offset + d.Y, topInset, math.max(topInset, s.Y - TITLE_H))
 			win.Position = px(x, y)
 		elseif resizing then
-			local d = input.Position - dragStart
+			local d = (input.Position - dragStart) / sc
 			win.Size = px(math.max(MIN_W, startSize.X + d.X), math.max(MIN_H, startSize.Y + d.Y))
 		elseif miniDrag then
-			local d = input.Position - dragStart
+			local d = (input.Position - dragStart) / sc
 			if d.Magnitude > 4 then miniMoved = true end
 			if miniMoved then
-				local s = root.AbsoluteSize
-				local topInset = GuiService:GetGuiInset().Y
-				local x = math.clamp(startPos.X.Offset + d.X, 0, math.max(0, s.X - mini.AbsoluteSize.X))
+				local s = gui.AbsoluteSize / sc
+				local topInset = GuiService:GetGuiInset().Y / sc
+				local x = math.clamp(startPos.X.Offset + d.X, 0, math.max(0, s.X - MINI_W))
 				local y = math.clamp(startPos.Y.Offset + d.Y, topInset, math.max(topInset, s.Y - TITLE_H))
 				mini.Position = px(x, y)
 			end
@@ -1605,6 +1627,45 @@ function Library:CreateWindow(opt)
 		return tab
 	end
 
+	--------------------------------------------------------------------
+	-- scaling: fits any screen, from phones to 4K
+	--------------------------------------------------------------------
+	-- 1080p is 1x. Taller screens scale the UI up with their height, a screen too small for the
+	-- window scales it down to fit (never below 0.3x). lib._scaleMult is the user's own slider.
+	local function computeScale()
+		local v = gui.AbsoluteSize
+		if v.X < 100 or v.Y < 100 then return lib._scale end -- the real size isn't known yet
+		local want = math.clamp(v.Y / 1080, 0.85, 2.5) * lib._scaleMult
+		local fit = math.min((v.X - 16) / math.max(W0, MIN_W), (v.Y - 56) / H0)
+		return math.clamp(math.min(want, fit), 0.3, 3)
+	end
+
+	local function applyScale()
+		local s = computeScale()
+		if math.abs(s - lib._scale) < 0.005 then return end
+		lib._scale = s
+		uiScale.Scale = s
+		scaler.Size = UDim2.fromScale(1 / s, 1 / s)
+		lib:_closePopups()
+		-- keep the window and the bar on screen, and a maximized window filling it
+		local v = gui.AbsoluteSize / s
+		local function keep(obj, w)
+			local p = obj.Position
+			if p.X.Scale ~= 0 or p.Y.Scale ~= 0 then return end -- still centered by scale
+			obj.Position = px(math.clamp(p.X.Offset, -w + 100, v.X - 100), math.clamp(p.Y.Offset, 0, math.max(0, v.Y - 40)))
+		end
+		keep(win, win.Size.X.Offset)
+		keep(mini, MINI_W)
+		if maximized then win.Size = px(v.X, v.Y) end
+	end
+
+	function lib:SetScale(multiplier)
+		self._scaleMult = math.clamp(tonumber(multiplier) or 1, 0.5, 2)
+		applyScale()
+	end
+	connect(gui:GetPropertyChangedSignal("AbsoluteSize"), applyScale)
+	applyScale()
+
 	return W
 end
 
@@ -1659,7 +1720,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.1.1"
+local VERSION = "1.2.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3476,6 +3537,9 @@ Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default
 	writeTheme(v)
 	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
 end })
+Menu:AddSlider("ui_scale", { Text = "UI Scale", Min = 50, Max = 200, Default = 100, Suffix = "%",
+	Tooltip = "Makes the whole menu bigger or smaller. It always fits your screen, whatever you pick",
+	Callback = function(v) Library:SetScale(v / 100) end })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer", "This is what a role alert looks like.", 5)
