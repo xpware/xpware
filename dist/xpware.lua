@@ -119,7 +119,21 @@ local BASE_THEME, BASE_G = table.clone(Theme), table.clone(G)
 
 Library.ThemeOrder = { "Classic", "Dark", "Rose", "Olive", "Silver" }
 Library.Themes = {
-	Classic = {},
+	-- Classic keeps the Luna blue frame, but its whites lean warm and yellow: easier on the eyes than
+	-- pure white, especially with a night light on. The other themes are untouched.
+	Classic = {
+		Theme = {
+			Face = "EFE9CE", Panel = "FFFAE6", PanelMid = "FBF5DF", Field = "FFFCEB", Light = "FFFDF3", Track = "F6F1DC",
+		},
+		G = {
+			Button     = {{0,"FFFDF0"},{0.86,"F1EDDA"},{1,"DDD5BE"}},
+			ButtonDown = {{0,"D3CEB9"},{0.08,"E8E4D0"},{0.94,"EAE6D3"},{1,"F6F2E1"}},
+			Check      = {{0,"E2DEC8"},{1,"FFFDF0"}},
+			TabIdle    = {{0,"FFFDF2"},{0.8,"F6F2E0"},{1,"EFEAD6"}},
+			Panel      = {{0,"FFFAE6"},{1,"F7F1DA"}},
+			Thumb      = {{0,"FFFDF2"},{1,"E8E3CB"}},
+		},
+	},
 
 	Dark = {
 		Theme = {
@@ -1938,7 +1952,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.14.0"
+local VERSION = "1.15.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
