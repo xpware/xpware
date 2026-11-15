@@ -1738,7 +1738,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.5.0"
+local VERSION = "1.6.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3615,8 +3615,8 @@ end
 -- pets, a list of keys for everything else) and refreshes its screens when the local event
 -- Remotes.Inventory.InventoryDataChanged fires with (category, item, amount). Those are the two
 -- steps its own code takes when the server sends a new item, so that's all this does. Nothing is
--- sent to the server: nobody else sees any of it, and trades and the weapon you really hold use
--- your real inventory.
+-- sent to the server: nobody else sees any of it, and trades use your real inventory. Equipping a
+-- knife or gun also welds its model onto the one you hold (see "In-hand skins").
 ------------------------------------------------------------------------
 do
 	local InventoryTab = Window:AddTab("Inventory")
@@ -3731,10 +3731,170 @@ do
 		end
 	end
 
+	-- In-hand skins ----------------------------------------------------------------------------
+	-- The knife or gun you hold is built by the server, so its look can't be changed at the source. But
+	-- every item in the database has an ItemID, the model the server builds its weapon from. We load
+	-- that model ourselves (game:GetObjects) and weld copies of its parts onto your real weapon's
+	-- handle, hiding the real handle. Parts we create never replicate, so only you see any of it.
+	local SKIN = "xpware_skin"
+	local skinChoice = {} -- "Knife" / "Gun" -> the item chosen
+	local modelCache = {} -- ItemID -> the loaded model, so each skin is fetched once
+	local skinned = {}    -- tools wearing a skin right now
+
+	local function weaponType(tool)
+		if not tool:IsA("Tool") then return nil end
+		if tool:HasTag("Weapon_Knife") or tool.Name == "Knife" then return "Knife" end
+		if tool:HasTag("Weapon_Gun") or tool.Name == "Gun" then return "Gun" end
+		return nil
+	end
+
+	local function clearSkin(tool)
+		local holder = tool:FindFirstChild(SKIN)
+		if holder then holder:Destroy() end
+		local handle = tool:FindFirstChild("Handle")
+		local was = tool:GetAttribute("xpware_handle_transparency")
+		if handle and was ~= nil then handle.Transparency = was end
+		tool:SetAttribute("xpware_handle_transparency", nil)
+		tool:SetAttribute(SKIN, nil)
+		skinned[tool] = nil
+	end
+
+	-- loads an item's model once; returns it, or nil and why not
+	local function loadSkin(entry)
+		local id = entry.info.ItemID
+		if not id then return nil, "that item has no model" end
+		if modelCache[id] then return modelCache[id] end
+		local ok, objects = pcall(function() return game:GetObjects("rbxassetid://" .. tostring(id)) end)
+		local root = ok and type(objects) == "table" and objects[1]
+		if not root then return nil, "its model couldn't be loaded (it may be private, or your executor can't load models)" end
+		local tool = root:IsA("Tool") and root or root:FindFirstChildWhichIsA("Tool", true)
+		local container = tool or root
+		local handle = container:FindFirstChild("Handle") or container:FindFirstChild("Handle", true)
+		if not (handle and handle:IsA("BasePart")) then
+			root:Destroy()
+			return nil, "its model has no handle"
+		end
+		local parts = {}
+		for _, d in ipairs(container:GetDescendants()) do
+			if d:IsA("BasePart") then table.insert(parts, d) end
+		end
+		local skin = { root = root, handle = handle, parts = parts, grip = tool and tool.Grip or CFrame.new() }
+		modelCache[id] = skin
+		return skin
+	end
+
+	-- Copies every part of the skin onto the real handle with explicit Weld offsets (so it doesn't matter
+	-- where the tool is when this runs), then hides the real handle. The offset accounts for the two
+	-- tools' different grips: the hand holds a tool so that Handle = Hand * Grip^-1.
+	local function applySkin(tool, entry)
+		if tool:GetAttribute(SKIN) == entry.key then return true end
+		clearSkin(tool)
+		local handle = tool:FindFirstChild("Handle") or tool:WaitForChild("Handle", 5)
+		if not (handle and handle:IsA("BasePart")) then return false, "the weapon has no handle yet" end
+		local skin, why = loadSkin(entry)
+		if not skin then return false, why end
+
+		local holder = Instance.new("Model")
+		holder.Name = SKIN
+		local toSkinHandle = tool.Grip * skin.grip:Inverse()
+		for _, part in ipairs(skin.parts) do
+			local copy = part:Clone()
+			for _, d in ipairs(copy:GetDescendants()) do
+				if d:IsA("LuaSourceContainer") or d:IsA("JointInstance") or d:IsA("WeldConstraint")
+					or d:IsA("TouchTransmitter") or d:IsA("Sound") then
+					d:Destroy()
+				end
+			end
+			copy.Anchored = false
+			copy.CanCollide, copy.CanTouch, copy.CanQuery, copy.Massless = false, false, false, true
+			local weld = Instance.new("Weld")
+			weld.Part0, weld.Part1 = handle, copy
+			weld.C0 = toSkinHandle * skin.handle.CFrame:ToObjectSpace(part.CFrame)
+			weld.Parent = copy
+			copy.Parent = holder
+		end
+		if tool:GetAttribute("xpware_handle_transparency") == nil then
+			tool:SetAttribute("xpware_handle_transparency", handle.Transparency)
+		end
+		handle.Transparency = 1
+		holder.Parent = tool
+		tool:SetAttribute(SKIN, entry.key)
+		skinned[tool] = true
+		return true
+	end
+
+	local function weaponTools()
+		local list = {}
+		for _, holder in ipairs({ LP.Character, LP:FindFirstChildOfClass("Backpack") }) do
+			if holder then
+				for _, t in ipairs(holder:GetChildren()) do
+					local kind = weaponType(t)
+					if kind then table.insert(list, { tool = t, kind = kind }) end
+				end
+			end
+		end
+		return list
+	end
+
+	-- puts the chosen skin on every knife / gun you have, and takes it off any you've unchosen
+	local applying, pending = false, false
+	local function applySkins(report)
+		if applying then pending = true return end
+		applying = true
+		local problem
+		for _, w in ipairs(weaponTools()) do
+			local entry = skinChoice[w.kind]
+			if entry then
+				local ok, why = applySkin(w.tool, entry)
+				if not ok then problem = why end
+			elseif skinned[w.tool] then
+				clearSkin(w.tool)
+			end
+		end
+		applying = false
+		if report and problem then notify("Couldn't show that skin: " .. problem .. ".", "Inventory", 6) end
+		if pending then
+			pending = false
+			task.defer(applySkins)
+		end
+	end
+
+	local function clearAllSkins()
+		skinChoice = {}
+		for _, w in ipairs(weaponTools()) do clearSkin(w.tool) end
+		for tool in pairs(skinned) do clearSkin(tool) end
+	end
+
+	-- the server builds a fresh knife and gun every round: dress them as they arrive
+	local function onWeaponAdded(inst)
+		local kind = weaponType(inst)
+		if kind and skinChoice[kind] then task.spawn(applySkins) end
+	end
+	on(LP.DescendantAdded, onWeaponAdded) -- the Backpack's contents
+	local function hookCharacter(char) on(char.ChildAdded, onWeaponAdded) end
+	if LP.Character then hookCharacter(LP.Character) end
+	on(LP.CharacterAdded, hookCharacter)
+
+	-- the server's own scripts may show the real handle again; keep it hidden
+	task.spawn(function()
+		while running() do
+			for tool in pairs(skinned) do
+				if not tool.Parent then
+					skinned[tool] = nil
+				else
+					local handle = tool:FindFirstChild("Handle")
+					if handle and handle.Transparency ~= 1 then handle.Transparency = 1 end
+				end
+			end
+			task.wait(0.5)
+		end
+	end)
+
 	local function removeAdded()
 		local profile = getProfile()
 		if not profile then return 0 end
 		restoreEquipped(profile)
+		clearAllSkins()
 		local n = #added
 		for i = #added, 1, -1 do
 			local e = added[i]
@@ -3753,7 +3913,11 @@ do
 		if n > 0 then refreshGame(profile) end
 		return n
 	end
-	onUnload(function() pcall(removeAdded) end)
+	onUnload(function()
+		pcall(removeAdded)
+		pcall(clearAllSkins)
+		for _, skin in pairs(modelCache) do pcall(function() skin.root:Destroy() end) end
+	end)
 
 	-- the tab ----------------------------------------------------------------------------------
 	local shown, byLabel = {}, {}
@@ -3830,7 +3994,9 @@ do
 		profile.Weapons.Equipped[itemType] = e.key
 		local ok, equip = pcall(require, equipModule)
 		if ok and type(equip) == "table" and equip.EquippedChanged then equip.EquippedChanged:Fire(itemType, e.key) end
+		skinChoice[itemType] = e
 		notify(e.name .. " is shown as your equipped " .. itemType:lower() .. ".", "Inventory", 4)
+		applySkins(true) -- puts its skin on the one in your hand too, once its model has loaded
 	end
 
 	local PickBox = InventoryTab:AddGroup("Pick An Item", "Left")
@@ -3847,13 +4013,19 @@ do
 	local AddBox = InventoryTab:AddGroup("Your Inventory", "Right")
 	AddBox:AddButton({ Text = "Add Item", Tooltip = "Puts the selected item in your inventory screen", Callback = addSelected })
 	AddBox:AddButton({ Text = "Add All Listed", Tooltip = "Adds every item in the list, including the search results", Callback = function() task.spawn(addAllShown) end })
-	AddBox:AddButton({ Text = "Equip Item (Knife / Gun)", Tooltip = "Shows it as your equipped knife or gun on your screen", Callback = equipSelected })
+	AddBox:AddButton({ Text = "Equip Item (Knife / Gun)", Tooltip = "Shows it as your equipped knife or gun, and puts its skin on the weapon in your hand (your screen only)", Callback = equipSelected })
+	AddBox:AddButton({ Text = "Show My Real Weapons", Tooltip = "Takes the skins off the knife and gun in your hand", Callback = function()
+		local profile = getProfile()
+		if profile then restoreEquipped(profile) end
+		clearAllSkins()
+		notify("Showing your real weapons.", "Inventory", 3)
+	end })
 	AddBox:AddDivider()
 	AddBox:AddButton({ Text = "Remove What I Added", Callback = function()
 		local n = removeAdded()
 		notify(n > 0 and ("Removed " .. n .. " items.") or "Nothing to remove.", "Inventory", 3)
 	end })
-	AddBox:AddLabel("Only you see this. Trades and the weapon you really hold are unchanged. Equip added items with the button above, not the game's own Equip button.", { Color = Library.Theme.TextDim })
+	AddBox:AddLabel("Only you see this. Equipping a knife or gun also dresses the one in your hand. Trades and your real weapon are unchanged. Equip added items with the button above, not the game's own Equip button.", { Color = Library.Theme.TextDim })
 
 	refreshList()
 end
