@@ -1659,7 +1659,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.1.0"
+local VERSION = "1.1.1"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3363,15 +3363,15 @@ do
 		lastFiredAt = os.clock()
 		local my = lastFiredAt
 		PlayEmote:Fire(entry.key)
-		-- the game's script should have it playing within a moment; if it hasn't (some builds only
-		-- let you play emotes you own), play the animation ourselves
-		task.delay(1, function()
+		-- the game's script plays it the instant it's fired; if nothing has started 0.3s later (it
+		-- may only play emotes you own, or its idle animation cut in), play the animation ourselves
+		task.delay(0.3, function()
 			if my == lastFiredAt and not emoteActive() and not entry.toy then playOwn(entry) end
 		end)
 	end
 
-	-- Emote When Still: once each time you stop, and again if the emote ends by itself while you
-	-- stand there. Anything that isn't plain standing (moving, in the air, seated, pinned by
+	-- Emote When Still: starts the moment you stop (checked every frame; the optional wait is 0 by
+	-- default), once each time you stop, and again if the emote ends by itself while you stand there. Anything that isn't plain standing (moving, in the air, seated, pinned by
 	-- the coin farm, mid-fling) counts as not still and starts the wait over.
 	task.spawn(function()
 		local stillSince, playedThisStop, sawTrack = nil, false, false
@@ -3387,7 +3387,7 @@ do
 				stillSince = stillSince or now
 				local active = emoteActive()
 				if active then sawTrack = true end
-				if now - stillSince >= (Flags.emote_delay or 1.5) and not active then
+				if now - stillSince >= (Flags.emote_wait or 0) and not active then
 					if not playedThisStop or (sawTrack and now - lastFiredAt > 2) then
 						playedThisStop, sawTrack = true, false
 						playEmote(Flags.emote)
@@ -3396,7 +3396,7 @@ do
 			else
 				stillSince, playedThisStop, sawTrack = nil, false, false
 			end
-			task.wait(0.2)
+			RunService.Heartbeat:Wait()
 		end
 	end)
 
@@ -3450,8 +3450,8 @@ do
 		if not stopEmote() then notify("Walk or jump to stop an emote.", nil, 2) end
 	end })
 	EmotesBox:AddToggle("auto_emote", { Text = "Emote When Still", Tooltip = "Plays the selected emote every time you stop moving" })
-	EmotesBox:AddSlider("emote_delay", { Text = "Still For", Min = 0.5, Max = 10, Default = 1.5, Rounding = 1, Suffix = " s",
-		Tooltip = "How long you stand still before the emote starts" })
+	EmotesBox:AddSlider("emote_wait", { Text = "Still For", Min = 0, Max = 10, Default = 0, Rounding = 1, Suffix = " s",
+		Tooltip = "How long you stand still before the emote starts. 0 = the moment you stop" })
 	EmotesBox:AddLabel("These are the game's own emotes, so everyone sees them. Walking cancels them.", { Color = Library.Theme.TextDim })
 end
 
