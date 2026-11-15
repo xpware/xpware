@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.9.0"
+local VERSION = "1.10.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -83,6 +83,10 @@ if not themeName then
 end
 Library:SetTheme(themeName)
 
+-- loading splash: shown while everything below builds, closed at the very end
+local loader = Library:ShowLoading({ Title = NAME, Heading = "Starting " .. NAME .. " v" .. VERSION })
+loader:Step("Initialising interface...")
+
 -- window first: the ESP folder mounts next to Library.Gui, which only exists after this
 local Window = Library:CreateWindow({
 	Title = NAME .. " - Murder Mystery 2",
@@ -90,6 +94,9 @@ local Window = Library:CreateWindow({
 	ToggleKey = Enum.KeyCode.RightShift,
 	Status = "Ready",
 })
+-- keep the window out of sight until loading is done (and never leave it hidden if loading stalls)
+if Library.Gui then Library.Gui.Enabled = false end
+task.delay(45, function() if Library.Gui then Library.Gui.Enabled = true end end)
 
 ------------------------------------------------------------------------
 -- Character helpers
@@ -215,6 +222,7 @@ local function liveCoins()
 	return list
 end
 
+loader:Step("Initialising ESP and role detection...")
 ------------------------------------------------------------------------
 -- ESP: Highlight outlines + billboard text + Drawing tracers
 ------------------------------------------------------------------------
@@ -424,6 +432,7 @@ local function updateCoinEsp()
 	end
 end
 
+loader:Step("Mapping the round and spawn points...")
 ------------------------------------------------------------------------
 -- Teleport
 ------------------------------------------------------------------------
@@ -574,6 +583,7 @@ EspItems:AddToggle("coin_esp", { Text = "Coins", Callback = function(v) if not v
 local busy = false        -- true while a fling is driving the character
 local forceNoclip = false -- the coin farm turns on noclip through this while it glides
 
+loader:Step("Hooking combat and aim assist...")
 ------------------------------------------------------------------------
 -- Combat. Names and arguments come from a remote capture:
 --   gun:   Gun.Shoot:FireServer(rootCFrame, CFrame.new(aimPosition))
@@ -918,6 +928,7 @@ do
 	MurdererBox:AddButton({ Text = "Kill All", Tooltip = "Stabs everyone alive at once, wherever they are", Callback = killAll })
 end
 
+loader:Step("Setting up teleports and gun tracking...")
 ------------------------------------------------------------------------
 -- Teleport
 ------------------------------------------------------------------------
@@ -1021,6 +1032,7 @@ do
 	GunBox:AddButton({ Text = "Grab Gun Now", Callback = function() grabGun(true) end })
 end
 
+loader:Step("Preparing trolling tools...")
 ------------------------------------------------------------------------
 -- Trolling
 ------------------------------------------------------------------------
@@ -1205,6 +1217,7 @@ do
 	end)
 end
 
+loader:Step("Loading player utilities...")
 ------------------------------------------------------------------------
 -- Player
 ------------------------------------------------------------------------
@@ -1278,6 +1291,7 @@ do
 	Movement:AddToggle("anti_fling", { Text = "Anti Fling", Tooltip = "Other players can't push or fling you" })
 end
 
+loader:Step("Starting server and misc tools...")
 ------------------------------------------------------------------------
 -- Misc
 ------------------------------------------------------------------------
@@ -1390,6 +1404,7 @@ do
 	end })
 end
 
+loader:Step("Initialising autofarm systems...")
 ------------------------------------------------------------------------
 -- Autofarm
 ------------------------------------------------------------------------
@@ -1691,6 +1706,7 @@ do
 	onUnload(surface)
 end
 
+loader:Step("Scanning the emote library...")
 ------------------------------------------------------------------------
 -- Fun
 ------------------------------------------------------------------------
@@ -1930,6 +1946,7 @@ do
 	EmotesBox:AddLabel("These are the game's own emotes, so everyone sees them. Walking cancels them.", { Color = Library.Theme.TextDim })
 end
 
+loader:Step("Reading the item database...")
 ------------------------------------------------------------------------
 -- Inventory (local only)
 --
@@ -2449,6 +2466,7 @@ do
 	refreshList()
 end
 
+loader:Step("Building the settings panel...")
 ------------------------------------------------------------------------
 -- Settings (menu controls are UI, so they actually work)
 ------------------------------------------------------------------------
@@ -2486,6 +2504,7 @@ About:AddLabel("Murder Mystery 2", { Color = Library.Theme.TextDim })
 About:AddDivider()
 About:AddLabel("X and _ shrink the window into a small bar. Click the bar to open it again. Unload stops the script.")
 
+loader:Step("Restoring your saved settings...")
 ------------------------------------------------------------------------
 -- Settings persistence: every control saves to xpware/mm2.json when it changes and loads on start
 ------------------------------------------------------------------------
@@ -2735,4 +2754,7 @@ on(LP.CharacterAdded, function()
 	end
 end)
 
+loader:Step("Ready.", 0.35)
+if Library.Gui then Library.Gui.Enabled = true end
+loader:Close()
 Library:Notify(NAME, "Loaded. Press " .. Library.ToggleKey.Name .. " to hide or show.", 5)

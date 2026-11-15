@@ -1062,6 +1062,121 @@ function Library:PickTheme(opt)
 end
 
 ------------------------------------------------------------------------
+-- Loading splash: a small XP window with the classic marching-blocks progress bar and a line of
+-- status text under it. Call SetTheme first so it wears the chosen theme.
+--   local loader = Library:ShowLoading({ Title = "xpware", Heading = "Starting xpware" })
+--   loader:Step("Initialising something...")   -- shows the text and lets the screen draw it
+--   loader:Close()                              -- fades out
+------------------------------------------------------------------------
+function Library:ShowLoading(opt)
+	opt = opt or {}
+	local lib = self
+	local RunService = game:GetService("RunService")
+
+	local gui = new("ScreenGui", {
+		Name = HttpService:GenerateGUID(false):sub(1, 8), ResetOnSpawn = false, IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 10001,
+	})
+	mount(gui)
+
+	local W, TITLE_H = 340, 30
+	local H = TITLE_H + 96
+	local holder = new("Frame", {
+		Parent = gui, AnchorPoint = Vector2.new(0.5, 0.5), Position = ud(0.5, 0, 0.5, 0), Size = px(W, H), BackgroundTransparency = 1,
+	})
+	-- scaled like the other windows so it fits any screen
+	local scale = new("UIScale", { Parent = holder })
+	local function fit()
+		local v = gui.AbsoluteSize
+		if v.X < 100 or v.Y < 100 then return end
+		scale.Scale = math.clamp(math.min(math.clamp(v.Y / 1080, 1, 2.5), (v.X - 16) / W, (v.Y - 16) / H), 0.3, 3)
+	end
+	fit()
+	connect(gui:GetPropertyChangedSignal("AbsoluteSize"), fit)
+
+	local cg = new("CanvasGroup", { Parent = holder, Size = ud(1, 0, 1, 0), BackgroundTransparency = 1, GroupTransparency = 1 })
+
+	local titleBar = new("Frame", {
+		Parent = cg, Size = ud(1, 0, 0, TITLE_H + 8), BackgroundColor3 = Theme.White,
+		corner(8), gradient(scaled(G.Title, TITLE_H / (TITLE_H + 8))),
+	})
+	logo(titleBar, 7, 7, 16, 2)
+	local title = opt.Title or "xpware"
+	new("TextLabel", { Parent = titleBar, Position = px(29, 1), Size = ud(1, -36, 0, TITLE_H), Text = title, FontFace = FONT_BOLD, TextSize = 14, TextColor3 = Theme.TitleShadow, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 2 })
+	new("TextLabel", { Parent = titleBar, Position = px(28, 0), Size = ud(1, -36, 0, TITLE_H), Text = title, FontFace = FONT_BOLD, TextSize = 14, TextColor3 = Theme.TitleText, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3 })
+
+	local body = new("Frame", { Parent = cg, Position = px(0, TITLE_H), Size = ud(1, 0, 1, -TITLE_H), BackgroundColor3 = hex(Theme.FrameLeft[2]) })
+	local face = new("Frame", { Parent = body, Position = px(3, 0), Size = ud(1, -6, 1, -3), BackgroundColor3 = Theme.Face })
+
+	new("TextLabel", {
+		Parent = face, Position = px(14, 12), Size = ud(1, -28, 0, 18), Text = opt.Heading or ("Starting " .. title),
+		FontFace = FONT_BOLD, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+	})
+
+	-- the trough, with the three blocks marching through it
+	local BAR_H = 20
+	local trough = new("Frame", {
+		Parent = face, Position = px(14, 38), Size = ud(1, -28, 0, BAR_H), BackgroundColor3 = Theme.Field,
+		corner(4), stroke(Theme.PanelBorder),
+	})
+	local clip = new("Frame", {
+		Parent = trough, Position = px(3, 3), Size = ud(1, -6, 1, -6), BackgroundTransparency = 1, ClipsDescendants = true,
+	})
+	local BLOCK_W, BLOCK_GAP, BLOCKS = 9, 2, 3
+	local groupW = BLOCKS * BLOCK_W + (BLOCKS - 1) * BLOCK_GAP
+	local blue = Theme.Select
+	local sheen = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, blue:Lerp(Theme.White, 0.7)),
+		ColorSequenceKeypoint.new(0.45, blue),
+		ColorSequenceKeypoint.new(1, blue:Lerp(Theme.Black, 0.3)),
+	})
+	local group = new("Frame", { Parent = clip, Size = px(groupW, BAR_H - 6), BackgroundTransparency = 1 })
+	for i = 1, BLOCKS do
+		new("Frame", {
+			Parent = group, Position = px((i - 1) * (BLOCK_W + BLOCK_GAP), 0), Size = px(BLOCK_W, BAR_H - 6),
+			BackgroundColor3 = Theme.White, corner(1), new("UIGradient", { Color = sheen, Rotation = 90 }),
+		})
+	end
+
+	local status = new("TextLabel", {
+		Parent = face, Position = px(14, 66), Size = ud(1, -28, 0, 16), Text = "Starting...", TextSize = 12,
+		TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+
+	local start = os.clock()
+	local march = RunService.Heartbeat:Connect(function()
+		local span = clip.AbsoluteSize.X / math.max(scale.Scale, 0.01) + groupW
+		group.Position = px(((os.clock() - start) * 150) % span - groupW, 0)
+	end)
+
+	local L = {}
+	local closed = false
+	function L:Step(text, dwell)
+		if closed then return end
+		status.Text = text
+		task.wait(dwell or 0.2) -- long enough to read, and gives the screen a frame to draw it
+	end
+	function L:Close(instant)
+		if closed then return end
+		closed = true
+		if lib._splash == L then lib._splash = nil end
+		local function finish()
+			march:Disconnect()
+			gui:Destroy()
+		end
+		if instant then finish() return end
+		local tw = tween(cg, 0.25, { GroupTransparency = 1 })
+		tw.Completed:Connect(finish)
+	end
+
+	if lib._splash then lib._splash:Close(true) end
+	lib._splash = L
+	tween(cg, 0.2, { GroupTransparency = 0 })
+	task.delay(45, function() L:Close() end) -- never leave it up if loading stalls
+	return L
+end
+
+------------------------------------------------------------------------
 -- Window
 ------------------------------------------------------------------------
 function Library:CreateWindow(opt)
@@ -1712,6 +1827,7 @@ function Library:OnUnload(fn) table.insert(self._onUnload, fn) end
 function Library:Unload()
 	if self.Unloaded then return end
 	self.Unloaded = true
+	if self._splash then pcall(function() self._splash:Close(true) end) end
 	for _, fn in ipairs(self._onUnload) do pcall(fn) end
 	for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
 	self._conns = {}
