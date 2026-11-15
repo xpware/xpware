@@ -416,7 +416,7 @@ function Library:_warmSounds()
 end
 
 local function playSfx(kind)
-	if Library.Unloaded then return end
+	if Library.Unloaded or Library.Flags.ui_sounds == false then return end
 	pcall(function()
 		local snd = sfxSound(kind)
 		snd.TimePosition = 0

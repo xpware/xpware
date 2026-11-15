@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.11.0"
+local VERSION = "1.12.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -96,6 +96,7 @@ local Window = Library:CreateWindow({
 })
 -- keep the window out of sight until loading is done (and never leave it hidden if loading stalls)
 if Library.Gui then Library.Gui.Enabled = false end
+local MainTab = Window:AddTab("Main") -- filled in near the end, once the other tabs' controls exist
 task.delay(45, function() if Library.Gui then Library.Gui.Enabled = true end end)
 
 ------------------------------------------------------------------------
@@ -123,7 +124,7 @@ end
 --   tools:  Knife / Gun in Backpack or Character
 --   gun drop: Workspace.<Map>.GunDrop
 ------------------------------------------------------------------------
-local State = { map = nil, lobbyBox = nil, gun = nil, data = {} }
+local State = { map = nil, lobbyBox = nil, gun = nil, data = {}, actions = {}, mainFlags = {} }
 
 local ROLE_COLORS = {
 	Murderer = Color3.fromRGB(255, 59, 59),
@@ -925,6 +926,7 @@ do
 		end
 	end })
 	MurdererBox:AddDivider()
+	State.actions.killAll = killAll
 	MurdererBox:AddButton({ Text = "Kill All", Tooltip = "Stabs everyone alive at once, wherever they are", Callback = killAll })
 end
 
@@ -1029,6 +1031,7 @@ do
 	GunBox:AddToggle("grab_gun", { Text = "Auto Grab Gun", Tooltip = "Grabs the gun the moment it drops. Touches it from where you stand first, and only snaps onto it if that isn't enough" })
 	GunBox:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Tooltip = "Takes you back to where you were, if you had to snap onto the gun" })
 	GunBox:AddToggle("gun_notify", { Text = "Notify When Dropped", Default = true, Tooltip = "Pops a notification when the sheriff drops the gun" })
+	State.actions.grabGun = function() grabGun(true) end
 	GunBox:AddButton({ Text = "Grab Gun Now", Callback = function() grabGun(true) end })
 end
 
@@ -1198,6 +1201,8 @@ do
 		local p = target()
 		if p then fling(p, "Target") else notify("Pick a target first.") end
 	end })
+	State.actions.flingMurderer = function() fling(findRole("Murderer"), "Murderer") end
+	State.actions.flingSheriff = function() fling(findSheriff(), "Sheriff") end
 	FlingBox:AddButton({ Text = "Fling Murderer", Callback = function() fling(findRole("Murderer"), "Murderer") end })
 	FlingBox:AddButton({ Text = "Fling Sheriff", Callback = function() fling(findSheriff(), "Sheriff") end })
 
@@ -1416,7 +1421,7 @@ do
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
 	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
 	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
-	CoinsBox:AddSlider("glide_speed", { Text = "Glide Speed", Min = 10, Max = 60, Default = 28, Suffix = " studs/s", Tooltip = "How fast you glide between coins. Higher is quicker but easier to get kicked for. 28 is the safe default" })
+	CoinsBox:AddSlider("glide_speed", { Text = "Glide Speed", Min = 10, Max = 42, Default = 28, Suffix = " studs/s", Tooltip = "How fast you glide between coins. 45 studs/s is the most the server allows, so this stops at 42. 28 is the safe default" })
 	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
 	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
@@ -1428,7 +1433,7 @@ do
 	local HIDE_DEPTH = 12 -- studs below the lowest coin: where we wait when there's nothing to take
 	-- Jumping straight to each coin (instant moves) got us kicked for an invalid position, so every move
 	-- is a smooth glide. The Glide Speed slider sets the pace; its default is one the server accepts.
-	local function glideSpeed() return Flags.glide_speed or 28 end -- studs per second
+	local function glideSpeed() return math.min(Flags.glide_speed or 28, 42) end -- studs per second; 45 is the most the server allows
 	-- How far below a coin to be when taking it, deepest first. We try the deepest and only come up
 	-- (and then stay at that depth) if the server doesn't register the touch from there.
 	local TOUCH_DEPTHS = { 5, 2, 0 }
@@ -2520,6 +2525,7 @@ Menu:AddDropdown("theme", { Text = "Theme", Values = Library.ThemeOrder, Default
 	writeTheme(v)
 	notify("Theme set to " .. v .. ". Re-run the script to apply it.", nil, 6)
 end })
+Menu:AddToggle("ui_sounds", { Text = "Sound Effects", Default = true, Tooltip = "The hover and click sounds on buttons" })
 Menu:AddDivider()
 Menu:AddButton({ Text = "Test Notification", Callback = function()
 	Library:Notify("Murderer", "This is what a role alert looks like.", 5)
@@ -2536,6 +2542,67 @@ About:AddLabel("Murder Mystery 2", { Color = Library.Theme.TextDim })
 About:AddDivider()
 About:AddLabel("X and _ shrink the window into a small bar. Click the bar to open it again. Unload stops the script.")
 
+loader:Step("Building the Main tab...")
+------------------------------------------------------------------------
+-- Main: the features you reach for most, in one place. Every control here is a twin of one on its own
+-- tab: change either and the other follows, so nothing is duplicated, just shown in two places.
+------------------------------------------------------------------------
+do
+	-- a control for `flag` on the Main tab that stays in step with the original
+	local function twin(group, kind, flag, o)
+		local real = Options[flag]
+		if not real then return end
+		local mainFlag = "main_" .. flag
+		State.mainFlags[mainFlag] = true -- the original is what gets saved
+		o.Default = real.Value
+		local ctl
+		if kind == "toggle" then ctl = group:AddToggle(mainFlag, o)
+		elseif kind == "slider" then ctl = group:AddSlider(mainFlag, o)
+		else ctl = group:AddDropdown(mainFlag, o) end
+		ctl:OnChanged(function(v) if real.Value ~= v then real:Set(v) end end)
+		real:OnChanged(function(v) if ctl.Value ~= v then ctl:Set(v) end end)
+		return ctl
+	end
+
+	local Esp = MainTab:AddGroup("ESP", "Left")
+	twin(Esp, "toggle", "esp_enabled", { Text = "ESP", Tooltip = "Master switch for all ESP" })
+	twin(Esp, "toggle", "esp_murderer", { Text = "Murderer" })
+	twin(Esp, "toggle", "esp_sheriff", { Text = "Sheriff / Hero" })
+	twin(Esp, "toggle", "esp_innocent", { Text = "Innocents" })
+	twin(Esp, "toggle", "gun_esp", { Text = "Dropped Gun" })
+	twin(Esp, "toggle", "coin_esp", { Text = "Coins" })
+
+	local GunBox = MainTab:AddGroup("Dropped Gun", "Left")
+	twin(GunBox, "toggle", "grab_gun", { Text = "Auto Grab Gun", Tooltip = "Grabs the gun the moment it drops" })
+	twin(GunBox, "toggle", "gun_notify", { Text = "Notify When Dropped" })
+	GunBox:AddButton({ Text = "Grab Gun Now", Callback = State.actions.grabGun })
+	GunBox:AddButton({ Text = "Teleport To Gun", Callback = tpGun })
+
+	local Farm = MainTab:AddGroup("Autofarm", "Left")
+	twin(Farm, "toggle", "autofarm_enabled", { Text = "Autofarm", Tooltip = "Master switch for every autofarm feature" })
+	twin(Farm, "toggle", "coin_farm", { Text = "Auto Collect Coins" })
+	twin(Farm, "toggle", "safe_spot", { Text = "Safe Spot", Tooltip = "Parks you on a platform 300 studs up. Turn off to go back." })
+
+	local Fight = MainTab:AddGroup("Combat", "Right")
+	twin(Fight, "toggle", "combat_enabled", { Text = "Combat", Tooltip = "Master switch for every combat feature" })
+	twin(Fight, "toggle", "silent_aim", { Text = "Silent Aim", Tooltip = "Gun shots land on the murderer wherever you click" })
+	twin(Fight, "toggle", "auto_shoot", { Text = "Auto Shoot Murderer" })
+	twin(Fight, "dropdown", "aim_target", { Text = "Aim Part", Values = { "Head", "Torso" } })
+	twin(Fight, "toggle", "knife_aura", { Text = "Knife Aura", Tooltip = "Stabs everyone inside the aura range" })
+	Fight:AddButton({ Text = "Kill All", Tooltip = "Murderer only: stabs everyone alive at once", Callback = State.actions.killAll })
+
+	local FlingBox = MainTab:AddGroup("Fling", "Right")
+	FlingBox:AddButton({ Text = "Fling Murderer", Callback = State.actions.flingMurderer })
+	FlingBox:AddButton({ Text = "Fling Sheriff", Callback = State.actions.flingSheriff })
+
+	local Me = MainTab:AddGroup("Player", "Right")
+	twin(Me, "slider", "walkspeed", { Text = "WalkSpeed", Min = 16, Max = 100 })
+	twin(Me, "slider", "jumppower", { Text = "JumpPower", Min = 50, Max = 200 })
+	twin(Me, "toggle", "noclip", { Text = "Noclip", Tooltip = "Walk through walls" })
+	twin(Me, "toggle", "inf_jump", { Text = "Infinite Jump" })
+	twin(Me, "toggle", "anti_fling", { Text = "Anti Fling", Tooltip = "Other players can't push or fling you" })
+end
+
 loader:Step("Restoring your saved settings...")
 ------------------------------------------------------------------------
 -- Settings persistence: every control saves to xpware/mm2.json when it changes and loads on start
@@ -2551,6 +2618,7 @@ local NO_SAVE = {
 	theme = true, -- lives in theme.txt so it can be applied before the window exists
 	inv_category = true, inv_search = true, inv_item = true, -- they depend on the list on screen
 }
+for flag in pairs(State.mainFlags) do NO_SAVE[flag] = true end -- the Main tab's twins: their originals are saved
 
 local function copyValue(v)
 	if type(v) ~= "table" then return v end
