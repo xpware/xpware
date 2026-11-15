@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.0.3"
+local VERSION = "1.1.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -1602,43 +1602,176 @@ end
 do
 	local Fun = Window:AddTab("Fun")
 
-	-- the default Animate script keeps these; a character without them just gets a notice
-	local EMOTES = {
-		["Dance"]   = { "dance", "Animation1" },
-		["Dance 2"] = { "dance2", "Animation1" },
-		["Dance 3"] = { "dance3", "Animation1" },
-		["Wave"]    = { "wave", "WaveAnim" },
-		["Point"]   = { "point", "PointAnim" },
-		["Cheer"]   = { "cheer", "CheerAnim" },
-		["Laugh"]   = { "laugh", "LaughAnim" },
-	}
-	local EMOTE_ORDER = { "Dance", "Dance 2", "Dance 3", "Wave", "Point", "Cheer", "Laugh" }
+	-- MM2's own emotes. The game plays one by firing the local event Remotes.Misc.PlayEmote with
+	-- the emote's key ("zen", "sit", "ninja", ...); its animation script then plays the animation
+	-- on your character, and Roblox replicates that to everyone. The full list comes from the
+	-- game's database (Database.Sync.Emotes and .Toys), not just the emotes you own.
+	local gameRemotes = ReplicatedStorage:FindFirstChild("Remotes")
+	local gameMisc = gameRemotes and gameRemotes:FindFirstChild("Misc")
+	local PlayEmote = gameMisc and gameMisc:FindFirstChild("PlayEmote")
 
-	local emoteTrack
+	local emoteByLabel, emoteNames = {}, {}
+
+	local function loadEmotes()
+		local ok, sync = pcall(function() return require(ReplicatedStorage.Database.Sync) end)
+		if not (ok and type(sync) == "table") then
+			ok, sync = pcall(function() return { Emotes = require(ReplicatedStorage.Database.Sync.Emotes) } end)
+		end
+		if not (ok and type(sync) == "table") then return end
+
+		local custom, basic, toys = {}, {}, {}
+		if type(sync.Emotes) == "table" then
+			for key, info in pairs(sync.Emotes) do
+				-- "Back" is the menu's back button, not an emote
+				if type(key) == "string" and key ~= "Back" and type(info) == "table" then
+					table.insert(info.AnimationID and custom or basic,
+						{ key = key, info = info, name = tostring(info.Name or key) })
+				end
+			end
+		end
+		if type(sync.Toys) == "table" then
+			for key, info in pairs(sync.Toys) do
+				if type(key) == "string" and type(info) == "table" then
+					table.insert(toys, { key = key, info = info, toy = true, name = tostring(info.Name or key) .. " (toy)" })
+				end
+			end
+		end
+		-- the game's custom animations first, then the Roblox basics, then toys
+		for _, group in ipairs({ custom, basic, toys }) do
+			table.sort(group, function(a, b) return a.name:lower() < b.name:lower() end)
+			for _, e in ipairs(group) do
+				local label = e.name
+				if emoteByLabel[label] then label = label .. " [" .. e.key .. "]" end
+				emoteByLabel[label] = e
+				table.insert(emoteNames, label)
+			end
+		end
+	end
+	loadEmotes()
+	if #emoteNames == 0 then -- no database to read: the Roblox basics still work through the same event
+		for _, key in ipairs({ "wave", "cheer", "laugh", "point", "dance1", "dance2", "dance3" }) do
+			emoteByLabel[key] = { key = key, info = {}, name = key }
+			table.insert(emoteNames, key)
+		end
+	end
+
+	-- matches the label, or the key, ignoring case (older saved settings hold names like "Dance")
+	local function findEmote(label)
+		if type(label) ~= "string" then return nil end
+		if emoteByLabel[label] then return emoteByLabel[label] end
+		local l = label:lower()
+		for name, e in pairs(emoteByLabel) do
+			if name:lower() == l or e.key:lower() == l then return e end
+		end
+		return nil
+	end
+
+	-- Emote tracks that are playing, the game's or our own fallback. The game names its emote
+	-- track after the emote ("ninja"); its idle/walk/jump tracks end in "Anim" or are "Animation1".
+	local tracks, ownTrack = {}, nil
+	local lastFiredAt = 0
+
+	local function isDefaultTrack(name)
+		return name:match("Anim$") ~= nil or name:match("^Animation%d*$") ~= nil
+	end
+
+	local function hookAnimator(char)
+		local h = char:WaitForChild("Humanoid", 5)
+		local animator = h and (h:FindFirstChildOfClass("Animator") or h:WaitForChild("Animator", 5))
+		if not animator then return end
+		on(animator.AnimationPlayed, function(track)
+			if os.clock() - lastFiredAt < 1.5 and not isDefaultTrack(track.Name) then tracks[track] = true end
+		end)
+	end
+	if LP.Character then task.spawn(hookAnimator, LP.Character) end
+
+	local function emoteActive()
+		local active = false
+		for t in pairs(tracks) do
+			local ok, playing = pcall(function() return t.IsPlaying end)
+			if ok and playing then active = true else tracks[t] = nil end
+		end
+		return active
+	end
+
+	-- returns true if there was something to stop
 	local function stopEmote()
-		if emoteTrack then pcall(function() emoteTrack:Stop() end) end
-		emoteTrack = nil
+		local stopped = false
+		for t in pairs(tracks) do
+			pcall(function() t:Stop(0.2) end)
+			tracks[t] = nil
+			stopped = true
+		end
+		ownTrack = nil
+		return stopped
 	end
 	onUnload(stopEmote)
 
-	local function playEmote(name)
-		local c, h = LP.Character, myHum()
-		local e = EMOTES[name]
-		if not (c and h and e) then return end
-		local animate = c:FindFirstChild("Animate")
-		local holder = animate and animate:FindFirstChild(e[1])
-		local anim = holder and (holder:FindFirstChild(e[2]) or holder:FindFirstChildOfClass("Animation"))
-		if not anim then notify("This character has no " .. name .. " animation.") return end
-		stopEmote()
+	-- our own copy of an emote animation, for when the game's script doesn't play it. Action
+	-- priority so it wins over the idle/walk tracks; it replicates like any animation we play.
+	local function playOwn(entry)
+		local id, h = entry.info.AnimationID, myHum()
+		if not (id and h) then return false end
+		local anim = Instance.new("Animation")
+		anim.Name = entry.key
+		anim.AnimationId = "rbxassetid://" .. tostring(id)
 		local ok, track = pcall(function()
-			local animator = h:FindFirstChildOfClass("Animator") or h
-			return animator:LoadAnimation(anim)
+			return (h:FindFirstChildOfClass("Animator") or h):LoadAnimation(anim)
 		end)
-		if not ok then notify("Couldn't play that emote.") return end
-		emoteTrack = track
-		emoteTrack.Priority = Enum.AnimationPriority.Action
-		emoteTrack:Play()
+		if not (ok and track) then return false end
+		track.Priority = Enum.AnimationPriority.Action
+		track.Looped = entry.info.Loop == true
+		track:Play(0.2)
+		ownTrack = track
+		tracks[track] = true
+		return true
 	end
+
+	local function playEmote(label)
+		local entry = findEmote(label)
+		if not entry then notify("Pick an emote first.") return end
+		if not PlayEmote then notify("This game has no emote system.") return end
+		if not (myHum() and myRoot()) then return end
+		stopEmote()
+		lastFiredAt = os.clock()
+		local my = lastFiredAt
+		PlayEmote:Fire(entry.key)
+		-- the game's script should have it playing within a moment; if it hasn't (some builds only
+		-- let you play emotes you own), play the animation ourselves
+		task.delay(1, function()
+			if my == lastFiredAt and not emoteActive() and not entry.toy then playOwn(entry) end
+		end)
+	end
+
+	-- Emote When Still: once each time you stop, and again if the emote ends by itself while you
+	-- stand there. Anything that isn't plain standing (moving, in the air, seated, pinned by
+	-- the coin farm, mid-fling) counts as not still and starts the wait over.
+	task.spawn(function()
+		local stillSince, playedThisStop, sawTrack = nil, false, false
+		while running() do
+			local h, r = myHum(), myRoot()
+			local still = h ~= nil and r ~= nil and h.Health > 0
+				and h.MoveDirection.Magnitude < 0.05
+				and Vector3.new(r.AssemblyLinearVelocity.X, 0, r.AssemblyLinearVelocity.Z).Magnitude < 0.5
+				and h.FloorMaterial ~= Enum.Material.Air
+				and not h.PlatformStand and not h.Sit and not busy
+			if Flags.auto_emote and still then
+				local now = os.clock()
+				stillSince = stillSince or now
+				local active = emoteActive()
+				if active then sawTrack = true end
+				if now - stillSince >= (Flags.emote_delay or 1.5) and not active then
+					if not playedThisStop or (sawTrack and now - lastFiredAt > 2) then
+						playedThisStop, sawTrack = true, false
+						playEmote(Flags.emote)
+					end
+				end
+			else
+				stillSince, playedThisStop, sawTrack = nil, false, false
+			end
+			task.wait(0.2)
+		end
+	end)
 
 	local spinning, frozen = false, false
 	on(RunService.Heartbeat, function(dt)
@@ -1660,10 +1793,12 @@ do
 			r.Anchored = false
 			frozen = false
 		end
-		if emoteTrack and h.MoveDirection.Magnitude > 0 then stopEmote() end
+		-- the game's emotes stop by themselves when you move; our fallback copy needs telling
+		if ownTrack and (h.MoveDirection.Magnitude > 0.1 or h.Jump) then stopEmote() end
 	end)
-	on(LP.CharacterAdded, function()
-		spinning, frozen, emoteTrack = false, false, nil
+	on(LP.CharacterAdded, function(char)
+		spinning, frozen, tracks, ownTrack = false, false, {}, nil
+		task.spawn(hookAnimator, char)
 	end)
 	onUnload(function()
 		local r, h = myRoot(), myHum()
@@ -1681,10 +1816,16 @@ do
 	end })
 
 	local EmotesBox = Fun:AddGroup("Emotes", "Right")
-	EmotesBox:AddDropdown("emote", { Text = "Emote", Values = EMOTE_ORDER, Default = "Dance" })
+	EmotesBox:AddDropdown("emote", { Text = "Emote", Values = emoteNames,
+		Default = emoteByLabel["Zen"] and "Zen" or emoteNames[1] })
 	EmotesBox:AddButton({ Text = "Play Emote", Callback = function() playEmote(Flags.emote) end })
-	EmotesBox:AddButton({ Text = "Stop Emote", Callback = stopEmote })
-	EmotesBox:AddLabel("Walking cancels the emote.", { Color = Library.Theme.TextDim })
+	EmotesBox:AddButton({ Text = "Stop Emote", Callback = function()
+		if not stopEmote() then notify("Walk or jump to stop an emote.", nil, 2) end
+	end })
+	EmotesBox:AddToggle("auto_emote", { Text = "Emote When Still", Tooltip = "Plays the selected emote every time you stop moving" })
+	EmotesBox:AddSlider("emote_delay", { Text = "Still For", Min = 0.5, Max = 10, Default = 1.5, Rounding = 1, Suffix = " s",
+		Tooltip = "How long you stand still before the emote starts" })
+	EmotesBox:AddLabel("These are the game's own emotes, so everyone sees them. Walking cancels them.", { Color = Library.Theme.TextDim })
 end
 
 ------------------------------------------------------------------------
