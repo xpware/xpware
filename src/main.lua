@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.3.0"
+local VERSION = "1.4.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -607,21 +607,54 @@ do
 		return tool.Parent == LP.Character
 	end
 
-	-- where to aim at a player: the chosen body part, led by their velocity
+	-- Where to aim at a player: head or torso, led to where they will be when the shot is judged.
+	-- The lead covers the trip to the server plus the delay in what we see (ping + 80ms, measured
+	-- live). It uses their velocity, a smoothed acceleration from the last few frames, and gravity
+	-- while they're in the air. Nothing is certain if they change direction inside that window.
+	local Stats = game:GetService("Stats")
+	local leadTime = 0.15
+	task.spawn(function()
+		while running() do
+			local ok, ms = pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+			if not (ok and type(ms) == "number" and ms > 0) then ms = 100 end
+			leadTime = math.clamp(ms / 1000 + 0.08, 0.06, 0.7)
+			task.wait(0.25)
+		end
+	end)
+
+	local motion = {} -- per player: last velocity, smoothed acceleration, and when it was sampled
+	on(Players.PlayerRemoving, function(p) motion[p] = nil end)
+
+	local function leadOffset(p, root, hum)
+		local now = os.clock()
+		local v = root.AssemblyLinearVelocity
+		local m = motion[p]
+		if not m or now - m.t > 0.5 then
+			m = { v = v, a = Vector3.zero, t = now }
+			motion[p] = m
+		elseif now - m.t >= 0.008 then
+			-- one frame of acceleration is mostly noise, so smooth it
+			m.a = m.a:Lerp((v - m.v) / (now - m.t), 0.25)
+			m.v, m.t = v, now
+		end
+		local t = leadTime
+		local flat = Vector3.new(v.X, 0, v.Z) * t + Vector3.new(m.a.X, 0, m.a.Z) * (0.25 * t * t)
+		local rise = 0
+		if hum and hum.FloorMaterial == Enum.Material.Air then
+			rise = v.Y * t - 0.5 * workspace.Gravity * t * t
+		end
+		local offset = Vector3.new(flat.X, rise, flat.Z)
+		if offset.Magnitude > 30 then offset = offset.Unit * 30 end
+		return offset
+	end
+
 	local function aimPoint(p, partName)
 		local c = p and p.Character
 		local root = c and c:FindFirstChild("HumanoidRootPart")
 		if not root then return nil end
-		local part
-		if partName == "Head" then
-			part = c:FindFirstChild("Head")
-		elseif partName == "Torso" then
-			part = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
-		end
-		part = part or root
-		local v = root.AssemblyLinearVelocity
-		local lead = (Flags.prediction or 0) / 1000
-		return part.Position + Vector3.new(v.X, v.Y * 0.5, v.Z) * lead
+		local part = (partName == "Head" and c:FindFirstChild("Head"))
+			or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso") or root
+		return part.Position + leadOffset(p, root, c:FindFirstChildOfClass("Humanoid"))
 	end
 
 	-- the player nearest the cursor (anyone off screen ranks behind everyone on screen)
@@ -679,7 +712,7 @@ do
 		local m = findRole("Murderer")
 		if not m then return false, "no murderer to shoot" end
 		if needSight and not hasSight(m) then return false, "no line of sight" end
-		local pos = aimPoint(m, Flags.aim_part)
+		local pos = aimPoint(m, Flags.aim_target)
 		if not pos then return false, "the murderer has no character" end
 		return fireGun(pos)
 	end
@@ -763,7 +796,7 @@ do
 		if not Flags.combat_enabled then return end
 		if Flags.silent_aim then
 			local m = findRole("Murderer")
-			if m then Aim.gun = aimPoint(m, Flags.aim_part) end
+			if m then Aim.gun = aimPoint(m, Flags.aim_target) end
 		end
 		if Flags.throw_assist then
 			local t = closestToCursor()
@@ -863,8 +896,8 @@ do
 		end
 	end })
 	SheriffBox:AddSlider("hit_chance", { Text = "Hit Chance", Min = 0, Max = 100, Default = 100, Suffix = "%", Tooltip = "Silent Aim only: how often a shot gets redirected" })
-	SheriffBox:AddDropdown("aim_part", { Text = "Aim Part", Values = { "Head", "Torso", "HumanoidRootPart" }, Default = "HumanoidRootPart" })
-	SheriffBox:AddSlider("prediction", { Text = "Prediction", Min = 0, Max = 300, Default = 120, Suffix = " ms", Tooltip = "Leads the target by their velocity (gun and knife throws)" })
+	SheriffBox:AddDropdown("aim_target", { Text = "Aim Part", Values = { "Head", "Torso" }, Default = "Torso",
+		Tooltip = "Where shots land. The lead for movement, ping and jumps is automatic" })
 	SheriffBox:AddToggle("auto_shoot", { Text = "Auto Shoot Murderer", Tooltip = "Shoots as soon as you have line of sight. Works without Silent Aim." })
 	SheriffBox:AddKeybind("shoot_key", { Text = "Shoot Murderer", Default = Enum.KeyCode.E, Callback = function()
 		if not Flags.combat_enabled then notify("Combat is switched off.", nil, 2) return end
@@ -1346,7 +1379,6 @@ do
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
 	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
 	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
-	CoinsBox:AddSlider("farm_depth", { Text = "Depth Under Map", Min = 5, Max = 40, Default = 15, Suffix = " studs", Tooltip = "How far below the lowest coin you stay" })
 	CoinsBox:AddSlider("farm_speed", { Text = "Farm Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Higher is faster but easier to get kicked for" })
 	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
@@ -1356,6 +1388,7 @@ do
 
 	-- lying on your back keeps the whole body a stud or two tall
 	local FLAT = CFrame.Angles(math.rad(90), 0, 0)
+	local HIDE_DEPTH = 12 -- studs below the lowest coin
 	local hasTouch = typeof(firetouchinterest) == "function"
 
 	-- the game's own per-round count when it's in the player data, otherwise our own tally
@@ -1408,7 +1441,7 @@ do
 	end)
 
 	-- one level under the whole map, so there are no floors, pits or upper decks to worry about:
-	-- below the lowest coin (or anyone standing even lower), by the depth slider
+	-- below the lowest coin (or anyone standing even lower), by HIDE_DEPTH
 	local function hideLevel()
 		local cc = State.map and State.map:FindFirstChild("CoinContainer", true)
 		if not cc then return nil end
@@ -1422,7 +1455,7 @@ do
 		end
 		if lowest == math.huge then return nil end
 		-- never below the height where Roblox destroys anything that falls
-		return math.max(lowest - (Flags.farm_depth or 15), workspace.FallenPartsDestroyHeight + 25)
+		return math.max(lowest - HIDE_DEPTH, workspace.FallenPartsDestroyHeight + 25)
 	end
 
 	local function descend()
@@ -1438,17 +1471,51 @@ do
 		return true
 	end
 
-	local function surface()
+	-- the same spot, standing upright: keeps only which way it faced
+	local function uprightAt(pos, facing)
+		local _, yaw = facing:ToOrientation()
+		return CFrame.new(pos) * CFrame.Angles(0, yaw, 0)
+	end
+
+	-- Put the character back on its feet. This settles over a few frames (position, every part's
+	-- velocity and the GettingUp state, each frame), because the humanoid can stay lying down after
+	-- PlatformStand ends. `settle` is false during unload, which can't wait.
+	local function standUp(cf, settle)
+		local c, h = LP.Character, myHum()
+		if not c then return end
+		for _ = 1, settle and 12 or 1 do
+			if not (c.Parent and myRoot()) then break end
+			c:PivotTo(cf)
+			for _, d in ipairs(c:GetDescendants()) do
+				if d:IsA("BasePart") then
+					d.AssemblyLinearVelocity = Vector3.zero
+					d.AssemblyAngularVelocity = Vector3.zero
+				end
+			end
+			if h then
+				h.PlatformStand = false
+				h.Sit = false
+				h:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end
+			if settle then RunService.Heartbeat:Wait() end
+		end
+	end
+
+	local function surface(settle)
 		if not hiding then return end
 		hiding, pin = false, nil
 		forceNoclip = false
-		local c, me, h = LP.Character, myRoot(), myHum()
+		local me, h = myRoot(), myHum()
 		if h then h.PlatformStand = false end
-		-- alive on the map: back up to where we were. Between rounds the game moves us itself.
-		if c and me and homeCF and State.map and inRound(LP) then
-			c:PivotTo(homeCF)
-			me.AssemblyLinearVelocity = Vector3.zero
-			if h then h:ChangeState(Enum.HumanoidStateType.GettingUp) end
+		if me then
+			if State.map and inRound(LP) then
+				-- alive on the map: back up to where we were (or a spawn if that's somehow unknown)
+				local target = homeCF and uprightAt(homeCF.Position, homeCF) or spawnCFrame(State.map)
+				if target then standUp(target, settle) end
+			else
+				-- between rounds the game moves us itself; just get off our back where we are
+				standUp(uprightAt(me.Position, me.CFrame), settle)
+			end
 		end
 		homeCF = nil
 	end
@@ -1503,7 +1570,7 @@ do
 		local remoteTried = useRemote
 		if useRemote then
 			touch(coin)
-			holdFor(0.4, function() return not isCoinLive(coin) end)
+			holdFor(0.25, function() return not isCoinLive(coin) end)
 			got = not isCoinLive(coin)
 			if got then misses = 0 end
 		end
@@ -1519,7 +1586,7 @@ do
 			got = not isCoinLive(coin)
 			if got and remoteTried then
 				misses += 1
-				if misses >= 2 then
+				if misses >= 1 then
 					useRemote = false
 					notify("Coins aren't registering from underneath, so I'll pop up to grab each one.", "Autofarm", 6)
 				end
@@ -1564,7 +1631,7 @@ do
 	task.spawn(function()
 		while running() do
 			local active = stillFarming() and inRound(LP)
-			if hiding and not (active and Flags.farm_hide) then surface() end
+			if hiding and not (active and Flags.farm_hide) then surface(true) end
 			if active then
 				local ok, moved = pcall(Flags.farm_hide and farmStepHidden or farmStepFloor)
 				if not ok then warn("[xpware] coin farm: " .. tostring(moved)) end
@@ -1605,7 +1672,7 @@ do
 	-- MM2's own emotes. The game plays one by firing the local event Remotes.Misc.PlayEmote with
 	-- the emote's key ("zen", "sit", "ninja", ...); its animation script then plays the animation
 	-- on your character, and Roblox replicates that to everyone. The full list comes from the
-	-- game's database (Database.Sync.Emotes and .Toys), not just the emotes you own.
+	-- game's database (Database.Sync.Emotes), not just the emotes you own. Toys are left out.
 	local gameRemotes = ReplicatedStorage:FindFirstChild("Remotes")
 	local gameMisc = gameRemotes and gameRemotes:FindFirstChild("Misc")
 	local PlayEmote = gameMisc and gameMisc:FindFirstChild("PlayEmote")
@@ -1619,7 +1686,7 @@ do
 		end
 		if not (ok and type(sync) == "table") then return end
 
-		local custom, basic, toys = {}, {}, {}
+		local custom, basic = {}, {}
 		if type(sync.Emotes) == "table" then
 			for key, info in pairs(sync.Emotes) do
 				-- "Back" is the menu's back button, not an emote
@@ -1629,15 +1696,8 @@ do
 				end
 			end
 		end
-		if type(sync.Toys) == "table" then
-			for key, info in pairs(sync.Toys) do
-				if type(key) == "string" and type(info) == "table" then
-					table.insert(toys, { key = key, info = info, toy = true, name = tostring(info.Name or key) .. " (toy)" })
-				end
-			end
-		end
-		-- the game's custom animations first, then the Roblox basics, then toys
-		for _, group in ipairs({ custom, basic, toys }) do
+		-- the game's custom animations first, then the Roblox basics
+		for _, group in ipairs({ custom, basic }) do
 			table.sort(group, function(a, b) return a.name:lower() < b.name:lower() end)
 			for _, e in ipairs(group) do
 				local label = e.name
