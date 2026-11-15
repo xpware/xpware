@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.0.2"
+local VERSION = "1.0.3"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -974,38 +974,92 @@ do
 
 	local function target() return findPlayer(Flags.troll_target) end
 
-	-- spin-fling: our root spins hard while it sits inside theirs, and the collision throws them.
-	-- busy pauses follow/orbit, noclip and anti-fling meanwhile, which would all get in the way.
+	-- Target fling, the way the well-known fling scripts do it: snap onto the target every frame
+	-- with enormous velocity and spin, so the collision throws THEM. The old version spun our own
+	-- body and had no protection, so it threw us instead and we fell into the void. Now:
+	--   - the void-kill height is switched off while it runs
+	--   - a zero-velocity BodyVelocity holds us in place between the snaps
+	--   - the camera watches the target, not our own body
+	--   - afterwards every part's velocity is zeroed each frame while we're put back home
+	-- busy pauses noclip, anti-fling, follow/orbit and the farm meanwhile (they'd all get in the way).
+	local HUGE_V = Vector3.new(9e7, 9e8, 9e7)
+	local HUGE_R = Vector3.new(9e8, 9e8, 9e8)
+
 	local function fling(p, label)
-		if busy then return end
-		local me, tr = myRoot(), rootOf(p)
-		if not tr then notify(label .. " not found.") return end
-		if not me then notify("You don't have a character right now.") return end
+		if busy or p == LP then return end
+		local c, me, h = LP.Character, myRoot(), myHum()
+		local tc, th = p and p.Character, humOf(p)
+		if not (tc and th and rootOf(p)) then notify(label .. " not found.") return end
+		if not (c and me and h) then notify("You don't have a character right now.") return end
+
 		busy = true
 		local home = me.CFrame
-		local spin = Instance.new("BodyAngularVelocity")
-		spin.MaxTorque = Vector3.new(0, math.huge, 0)
-		spin.P = math.huge
-		spin.AngularVelocity = Vector3.new(0, 9e5, 0)
-		spin.Parent = me
-		pcall(function()
-			local t0 = os.clock()
-			while running() and os.clock() - t0 < 2.5 and tr.Parent and isAlive(p) and myRoot() == me do
-				if tr.AssemblyLinearVelocity.Magnitude > 400 then break end -- they're gone
-				me.CFrame = CFrame.new(tr.Position + tr.AssemblyLinearVelocity * 0.12)
-				me.AssemblyLinearVelocity = Vector3.zero
-				RunService.Heartbeat:Wait()
+		local oldDestroyHeight = workspace.FallenPartsDestroyHeight
+		local bv
+		local landed = false
+
+		local ok, err = pcall(function()
+			pcall(function() workspace.FallenPartsDestroyHeight = 0 / 0 end)
+			h:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+			cam().CameraSubject = th
+
+			bv = Instance.new("BodyVelocity")
+			bv.Velocity = Vector3.zero
+			bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+			bv.Parent = me
+
+			-- one placement: on top of the target (a little ahead of where they're heading), spun
+			-- to a new angle, with the huge velocities set for this physics step
+			local function snap(base, offset, angle)
+				local v = base.AssemblyLinearVelocity
+				local lead = Vector3.new(v.X, 0, v.Z) * 0.12
+				c:PivotTo(CFrame.new(base.Position + lead) * offset * CFrame.Angles(math.rad(angle), 0, 0))
+				me.AssemblyLinearVelocity = HUGE_V
+				me.AssemblyAngularVelocity = HUGE_R
+			end
+
+			local angle, t0 = 0, os.clock()
+			while running() and os.clock() - t0 < 2.5 do
+				local base = rootOf(p)
+				if not (base and p.Parent and p.Character == tc and c.Parent) then break end
+				if th.Health <= 0 or h.Health <= 0 or th.Sit then break end
+				if base.AssemblyLinearVelocity.Magnitude > 500 then landed = true break end -- they're gone
+				angle += 100
+				snap(base, CFrame.new(0, 1.5, 0), angle)
+				task.wait()
+				snap(base, CFrame.new(0, -1.5, 0), angle)
+				task.wait()
+				snap(base, CFrame.new(2, 1.5, 0), angle)
+				task.wait()
+				snap(base, CFrame.new(-2, -1.5, 0), angle)
+				task.wait()
 			end
 		end)
-		spin:Destroy()
-		if me.Parent then
-			me.AssemblyAngularVelocity = Vector3.zero
-			me.AssemblyLinearVelocity = Vector3.zero
-			teleport(home, true)
-			local h = myHum()
-			if h then h:ChangeState(Enum.HumanoidStateType.GettingUp) end
+
+		-- always runs, even if something above errored
+		if bv then bv:Destroy() end
+		pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end)
+		if c.Parent and myRoot() then
+			-- back home, zeroing every velocity each frame until the physics has settled
+			for _ = 1, 15 do
+				c:PivotTo(home + Vector3.new(0, 0.5, 0))
+				for _, d in ipairs(c:GetDescendants()) do
+					if d:IsA("BasePart") then
+						d.AssemblyLinearVelocity = Vector3.zero
+						d.AssemblyAngularVelocity = Vector3.zero
+					end
+				end
+				pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+				task.wait()
+			end
 		end
+		local mine = (h.Parent and h) or myHum()
+		if mine then cam().CameraSubject = mine end
+		pcall(function() workspace.FallenPartsDestroyHeight = oldDestroyHeight end)
 		busy = false
+
+		if not ok then notify("Fling stopped: " .. tostring(err)) return end
+		notify(landed and ("Flung " .. p.DisplayName .. ".") or ("The fling didn't land on " .. p.DisplayName .. "."))
 	end
 
 	local function chat(msg)
