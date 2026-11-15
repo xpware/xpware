@@ -1659,7 +1659,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.0.1"
+local VERSION = "1.0.2"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -2917,13 +2917,19 @@ do
 	Autofarm:AddMasterToggle("autofarm_enabled", { Text = "Autofarm", Default = true, Tooltip = "Master switch for every autofarm feature" })
 
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
-	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Glides you from coin to coin through walls" })
+	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
+	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
+	CoinsBox:AddSlider("farm_depth", { Text = "Depth Under Map", Min = 5, Max = 40, Default = 15, Suffix = " studs", Tooltip = "How far below the lowest coin you stay" })
 	CoinsBox:AddSlider("farm_speed", { Text = "Farm Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Higher is faster but easier to get kicked for" })
-	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer" })
+	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
 	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
 	CoinsBox:AddSlider("bag_size", { Text = "Bag Size", Min = 10, Max = 50, Default = 40, Tooltip = "40 normally, 50 with Elite" })
 	local coinLabel = CoinsBox:AddLabel("Collected this round: 0")
+
+	-- lying on your back keeps the whole body a stud or two tall
+	local FLAT = CFrame.Angles(math.rad(90), 0, 0)
+	local hasTouch = typeof(firetouchinterest) == "function"
 
 	-- the game's own per-round count when it's in the player data, otherwise our own tally
 	local localCount = 0
@@ -2932,8 +2938,10 @@ do
 		return (d and tonumber(d.Coins)) or localCount
 	end
 
-	local function nextCoin(me)
-		local murderer = Flags.avoid_murderer and roleOf(LP) ~= "Murderer" and findRole("Murderer")
+	local function stillFarming() return running() and Flags.autofarm_enabled and Flags.coin_farm and not busy end
+
+	local function nextCoin(me, avoid)
+		local murderer = avoid and roleOf(LP) ~= "Murderer" and findRole("Murderer")
 		local mr = murderer and rootOf(murderer)
 		local radius = Flags.avoid_radius or 25
 		local best, bestDist
@@ -2946,13 +2954,161 @@ do
 		return best
 	end
 
-	local function stillFarming() return running() and Flags.autofarm_enabled and Flags.coin_farm and not busy end
+	-- fire the touch both ways, like the engine would
+	local function touch(coin)
+		local me = myRoot()
+		if not (hasTouch and me) then return end
+		pcall(firetouchinterest, me, coin, 0)
+		pcall(firetouchinterest, me, coin, 1)
+	end
 
-	-- glide to the nearest coin and stay on it until it's collected. Returns false if there was none.
-	local function farmStep()
+	------------------------------------------------------------------
+	-- stay under the map
+	------------------------------------------------------------------
+	local hiding, hideY, homeCF, pin = false, nil, nil, nil
+	local displaced = 0
+	local useRemote, misses = hasTouch, 0
+
+	-- Everything that moves us while hiding just sets `pin`; this puts us there every frame, so
+	-- gravity never gets a chance to pull us down into the void (also when there are no coins left).
+	on(RunService.Heartbeat, function()
+		if not (hiding and pin) then return end
+		local c, me = LP.Character, myRoot()
+		if c and me then
+			c:PivotTo(pin)
+			me.AssemblyLinearVelocity = Vector3.zero
+		end
+	end)
+
+	-- one level under the whole map, so there are no floors, pits or upper decks to worry about:
+	-- below the lowest coin (or anyone standing even lower), by the depth slider
+	local function hideLevel()
+		local cc = State.map and State.map:FindFirstChild("CoinContainer", true)
+		if not cc then return nil end
+		local lowest = math.huge
+		for _, c in ipairs(cc:GetChildren()) do
+			if c:IsA("BasePart") and c.Position.Y < lowest then lowest = c.Position.Y end
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			local r = rootOf(p)
+			if r and inRound(p) and r.Position.Y < lowest then lowest = r.Position.Y end
+		end
+		if lowest == math.huge then return nil end
+		-- never below the height where Roblox destroys anything that falls
+		return math.max(lowest - (Flags.farm_depth or 15), workspace.FallenPartsDestroyHeight + 25)
+	end
+
+	local function descend()
+		local me = myRoot()
+		local y = me and hideLevel()
+		if not y then return false end
+		local h = myHum()
+		homeCF, hideY = me.CFrame, y
+		if h then h.PlatformStand = true end
+		forceNoclip = true
+		pin = CFrame.new(me.Position.X, hideY, me.Position.Z) * FLAT
+		hiding = true
+		return true
+	end
+
+	local function surface()
+		if not hiding then return end
+		hiding, pin = false, nil
+		forceNoclip = false
+		local c, me, h = LP.Character, myRoot(), myHum()
+		if h then h.PlatformStand = false end
+		-- alive on the map: back up to where we were. Between rounds the game moves us itself.
+		if c and me and homeCF and State.map and inRound(LP) then
+			c:PivotTo(homeCF)
+			me.AssemblyLinearVelocity = Vector3.zero
+			if h then h:ChangeState(Enum.HumanoidStateType.GettingUp) end
+		end
+		homeCF = nil
+	end
+
+	local function glideTo(target, speed)
+		local me = myRoot()
+		if not me then return end
+		local start = me.Position
+		local dur = (target - start).Magnitude / speed
+		local t0 = os.clock()
+		while hiding and stillFarming() do
+			local a = dur > 0 and math.min((os.clock() - t0) / dur, 1) or 1
+			pin = CFrame.new(start:Lerp(target, a)) * FLAT
+			if a >= 1 then return end
+			RunService.Heartbeat:Wait()
+		end
+	end
+
+	local function holdFor(maxTime, done)
+		local t0 = os.clock()
+		while hiding and stillFarming() and os.clock() - t0 < maxTime and not done() do
+			RunService.Heartbeat:Wait()
+		end
+	end
+
+	-- slide under the nearest coin and take it from there. Returns false if there was nothing to do.
+	local function farmStepHidden()
 		local me = myRoot()
 		if not me then return false end
-		local coin = nextCoin(me)
+		if hiding and me.Position.Y > hideY + 10 then
+			-- something moved us back up; after a few times give up hiding rather than fight the game
+			displaced += 1
+			hiding = false
+			if displaced >= 3 then
+				notify("The game keeps moving you out from under the map. Switching Stay Under Map off.", "Autofarm", 6)
+				Options.farm_hide:Set(false)
+				return true
+			end
+		end
+		if not hiding and not descend() then return false end
+
+		local coin = nextCoin(myRoot() or me, Flags.avoid_murderer and not useRemote)
+		if not coin then return false end
+
+		local under = Vector3.new(coin.Position.X, hideY, coin.Position.Z)
+		local hold = CFrame.new(under) * FLAT
+		glideTo(under, 10 + (Flags.farm_speed or 4) * 3)
+		if not (hiding and isCoinLive(coin) and stillFarming()) then return true end
+
+		-- 1) touch it from underneath
+		local got = false
+		local remoteTried = useRemote
+		if useRemote then
+			touch(coin)
+			holdFor(0.4, function() return not isCoinLive(coin) end)
+			got = not isCoinLive(coin)
+			if got then misses = 0 end
+		end
+		-- 2) otherwise pop up onto it for a moment and drop straight back down
+		if not got and isCoinLive(coin) and stillFarming() then
+			local t0 = os.clock()
+			while hiding and isCoinLive(coin) and os.clock() - t0 < 0.5 and stillFarming() do
+				pin = CFrame.new(coin.Position) * FLAT
+				touch(coin)
+				RunService.Heartbeat:Wait()
+			end
+			pin = hold
+			got = not isCoinLive(coin)
+			if got and remoteTried then
+				misses += 1
+				if misses >= 2 then
+					useRemote = false
+					notify("Coins aren't registering from underneath, so I'll pop up to grab each one.", "Autofarm", 6)
+				end
+			end
+		end
+		if got then localCount += 1 end
+		return true
+	end
+
+	------------------------------------------------------------------
+	-- the plain version: glide coin to coin through the map (Stay Under Map off)
+	------------------------------------------------------------------
+	local function farmStepFloor()
+		local me = myRoot()
+		if not me then return false end
+		local coin = nextCoin(me, Flags.avoid_murderer)
 		if not coin then return false end
 		forceNoclip = true
 		local speed = 10 + (Flags.farm_speed or 4) * 3
@@ -2965,10 +3121,7 @@ do
 			task.wait()
 		end
 		if isCoinLive(coin) and me.Parent and stillFarming() then
-			if typeof(firetouchinterest) == "function" then
-				pcall(firetouchinterest, me, coin, 0)
-				pcall(firetouchinterest, me, coin, 1)
-			end
+			touch(coin)
 			-- hold still on the coin (noclip is on, so we'd otherwise sink through the floor)
 			local t0 = os.clock()
 			while isCoinLive(coin) and me.Parent and os.clock() - t0 < 0.5 do
@@ -2976,22 +3129,23 @@ do
 				me.AssemblyLinearVelocity = Vector3.zero
 				task.wait()
 			end
+			if not isCoinLive(coin) then localCount += 1 end
 		end
-		if not isCoinLive(coin) then localCount += 1 end
 		return true
 	end
 
 	task.spawn(function()
 		while running() do
-			if stillFarming() and inRound(LP) then
-				local ok, moved = pcall(farmStep)
+			local active = stillFarming() and inRound(LP)
+			if hiding and not (active and Flags.farm_hide) then surface() end
+			if active then
+				local ok, moved = pcall(Flags.farm_hide and farmStepHidden or farmStepFloor)
 				if not ok then warn("[xpware] coin farm: " .. tostring(moved)) end
 				if not (ok and moved) then
-					forceNoclip = false
-					task.wait(0.3)
+					if not hiding then forceNoclip = false end
+					task.wait(0.3) -- nothing to collect right now; if hiding, the pin keeps us safe meanwhile
 				end
 				if Flags.reset_full and coinsHeld() >= (Flags.bag_size or 40) then
-					forceNoclip = false
 					local h = myHum()
 					if h and h.Health > 0 then
 						h.Health = 0
@@ -2999,14 +3153,20 @@ do
 					end
 				end
 			else
-				forceNoclip = false
-				if not inRound(LP) then localCount = 0 end
+				if not hiding then forceNoclip = false end
+				if not inRound(LP) then localCount, displaced = 0, 0 end
 				task.wait(0.3)
 			end
 			coinLabel:Set("Collected this round: " .. coinsHeld())
 		end
 	end)
-	onUnload(function() forceNoclip = false end)
+
+	-- a new character is a fresh start: nothing to pin or put back
+	on(LP.CharacterAdded, function()
+		hiding, pin, homeCF = false, nil, nil
+		forceNoclip = false
+	end)
+	onUnload(surface)
 end
 
 ------------------------------------------------------------------------
