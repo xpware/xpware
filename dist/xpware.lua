@@ -1738,7 +1738,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.7.0"
+local VERSION = "1.8.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -2667,21 +2667,43 @@ do
 
 		grabbing = true
 		local home = me.CFrame
-		local t0 = os.clock()
-		-- stand on it until the touch registers and the gun lands in the backpack
-		while os.clock() - t0 < 1.5 and gun.Parent and not hasTool(LP, "Gun") and myRoot() do
-			teleport(gun.CFrame + Vector3.new(0, 2.5, 0), true)
-			if typeof(firetouchinterest) == "function" then
-				pcall(firetouchinterest, myRoot(), gun, 0)
-				pcall(firetouchinterest, myRoot(), gun, 1)
+		local canTouch = typeof(firetouchinterest) == "function"
+		local function got() return hasTool(LP, "Gun") ~= nil end
+		local function touchGun()
+			local r = myRoot()
+			if canTouch and r and gun.Parent then
+				pcall(firetouchinterest, r, gun, 0)
+				pcall(firetouchinterest, r, gun, 1)
 			end
-			task.wait(0.1)
 		end
-		local got = hasTool(LP, "Gun") ~= nil
-		if Flags.gun_return and myRoot() then teleport(home, true) end
+		local function waitFor(seconds)
+			local t0 = os.clock()
+			while os.clock() - t0 < seconds and gun.Parent and not got() do RunService.Heartbeat:Wait() end
+		end
+
+		-- 1) touch it from right where you stand: no travelling at all, like a kill aura but for the gun
+		local dist = (gun.Position - me.Position).Magnitude
+		local how
+		touchGun()
+		waitFor(0.15)
+		if got() then
+			how = string.format("from %d studs away", dist)
+		else
+			-- 2) the server wants you at it: snap onto it (one jump, no gliding) and touch every frame
+			local snapped = true
+			local t0 = os.clock()
+			while os.clock() - t0 < 1.0 and gun.Parent and not got() and myRoot() do
+				teleport(gun.CFrame + Vector3.new(0, 2.5, 0), true)
+				touchGun()
+				RunService.Heartbeat:Wait()
+			end
+			how = "after snapping onto it"
+			if snapped and Flags.gun_return and myRoot() then teleport(home, true) end
+		end
+		local ok = got()
 		grabbing = false
-		notify(got and "Grabbed the gun." or "Couldn't pick up the gun.", "Gun", 3)
-		return got
+		notify(ok and ("Grabbed the gun " .. how .. ".") or "Couldn't pick up the gun.", "Gun", 3)
+		return ok
 	end
 
 	task.spawn(function()
@@ -2689,18 +2711,18 @@ do
 			local gun = State.gun
 			if Flags.grab_gun and gun and gun.Parent and not grabbing then
 				if gun ~= triedGun then triedGun, tries = gun, 0 end
-				if tries < 2 and not hasTool(LP, "Gun") and roleOf(LP) ~= "Murderer" and inRound(LP) then
+				if tries < 4 and not hasTool(LP, "Gun") and roleOf(LP) ~= "Murderer" and inRound(LP) then
 					tries += 1
 					pcall(grabGun, false)
 				end
 			end
-			task.wait(0.5)
+			RunService.Heartbeat:Wait() -- every frame, so the gun is ours the moment it lands
 		end
 	end)
 
 	local GunBox = Teleport:AddGroup("Dropped Gun", "Left")
-	GunBox:AddToggle("grab_gun", { Text = "Auto Teleport To Gun", Tooltip = "Teleports onto the gun as soon as it drops and picks it up" })
-	GunBox:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Tooltip = "Takes you back to where you were" })
+	GunBox:AddToggle("grab_gun", { Text = "Auto Grab Gun", Tooltip = "Grabs the gun the moment it drops. Touches it from where you stand first, and only snaps onto it if that isn't enough" })
+	GunBox:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Tooltip = "Takes you back to where you were, if you had to snap onto the gun" })
 	GunBox:AddToggle("gun_notify", { Text = "Notify When Dropped", Default = true, Tooltip = "Pops a notification when the sheriff drops the gun" })
 	GunBox:AddButton({ Text = "Grab Gun Now", Callback = function() grabGun(true) end })
 end
@@ -3085,7 +3107,9 @@ do
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
 	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
 	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
-	CoinsBox:AddSlider("farm_speed", { Text = "Farm Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Higher is faster but easier to get kicked for" })
+	CoinsBox:AddToggle("farm_instant", { Text = "Instant Moves", Default = true, Tooltip = "Jumps straight to each coin instead of gliding. Much faster, and the likeliest to get noticed" })
+	CoinsBox:AddSlider("coin_range", { Text = "Pickup Range", Min = 0, Max = 100, Default = 40, Suffix = " studs", Tooltip = "Takes every coin this close without moving to it. 0 turns it off. If the server won't accept far pickups, it turns itself off" })
+	CoinsBox:AddSlider("farm_speed", { Text = "Glide Speed", Min = 1, Max = 10, Default = 4, Tooltip = "Only used when Instant Moves is off. Higher is faster but easier to get kicked for" })
 	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
 	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
@@ -3134,6 +3158,44 @@ do
 	local hiding, hideY, homeCF, pin = false, nil, nil, nil
 	local displaced = 0
 	local useRemote, misses = hasTouch, 0
+
+	-- Range pickup, the coin version of a kill aura: touch every live coin within Pickup Range without
+	-- moving, wait a moment, and see which ones really went. It learns whether the server accepts far
+	-- touches: a few sweeps where nothing far away was taken turns it off, and we move to coins as before.
+	local rangeOK, rangeFails, rangeDead = false, 0, false
+	local function sweep()
+		local reach = Flags.coin_range or 0
+		local me = myRoot()
+		if reach <= 0 or rangeDead or not (hasTouch and me) then return 0 end
+		local targets = {}
+		for _, coin in ipairs(liveCoins()) do
+			local d = (coin.Position - me.Position).Magnitude
+			if d <= reach then table.insert(targets, { coin = coin, d = d }) end
+		end
+		if #targets == 0 then return 0 end
+		for _, t in ipairs(targets) do touch(t.coin) end
+		local t0 = os.clock()
+		while os.clock() - t0 < 0.2 and stillFarming() do RunService.Heartbeat:Wait() end
+		local got, farGot, farTried = 0, 0, 0
+		for _, t in ipairs(targets) do
+			if not isCoinLive(t.coin) then
+				got += 1
+				if t.d > farGot then farGot = t.d end
+			end
+			if t.d > farTried then farTried = t.d end
+		end
+		localCount += got
+		if got > 0 and farGot > 20 then
+			rangeOK, rangeFails = true, 0
+		elseif got == 0 and farTried > 20 and not rangeOK then
+			rangeFails += 1
+			if rangeFails >= 3 then
+				rangeDead = true
+				notify("The server only takes coins up close, so Pickup Range is off. I'll move to each one.", "Autofarm", 6)
+			end
+		end
+		return got
+	end
 
 	-- Everything that moves us while hiding just sets `pin`; this puts us there every frame, so
 	-- gravity never gets a chance to pull us down into the void (also when there are no coins left).
@@ -3263,12 +3325,19 @@ do
 		end
 		if not hiding and not descend() then return false end
 
+		if sweep() > 0 then return true end -- everything in reach, without moving
+
 		local coin = nextCoin(myRoot() or me, Flags.avoid_murderer and not useRemote)
 		if not coin then return false end
 
 		local under = Vector3.new(coin.Position.X, hideY, coin.Position.Z)
 		local hold = CFrame.new(under) * FLAT
-		glideTo(under, 10 + (Flags.farm_speed or 4) * 3)
+		if Flags.farm_instant then
+			pin = hold -- one jump; the pin puts us there on the next frame
+			RunService.Heartbeat:Wait()
+		else
+			glideTo(under, 10 + (Flags.farm_speed or 4) * 3)
+		end
 		if not (hiding and isCoinLive(coin) and stillFarming()) then return true end
 
 		-- 1) touch it from underneath
@@ -3308,17 +3377,23 @@ do
 	local function farmStepFloor()
 		local me = myRoot()
 		if not me then return false end
+		forceNoclip = true
+		if sweep() > 0 then return true end -- everything in reach, without moving
 		local coin = nextCoin(me, Flags.avoid_murderer)
 		if not coin then return false end
-		forceNoclip = true
-		local speed = 10 + (Flags.farm_speed or 4) * 3
-		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / speed, Enum.EasingStyle.Linear),
-			{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
-		tw:Play()
-		while tw.PlaybackState == Enum.PlaybackState.Playing do
-			if not (stillFarming() and isCoinLive(coin) and me.Parent) then tw:Cancel() break end
+		if Flags.farm_instant then
+			me.CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation
 			me.AssemblyLinearVelocity = Vector3.zero
-			task.wait()
+		else
+			local speed = 10 + (Flags.farm_speed or 4) * 3
+			local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / speed, Enum.EasingStyle.Linear),
+				{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
+			tw:Play()
+			while tw.PlaybackState == Enum.PlaybackState.Playing do
+				if not (stillFarming() and isCoinLive(coin) and me.Parent) then tw:Cancel() break end
+				me.AssemblyLinearVelocity = Vector3.zero
+				task.wait()
+			end
 		end
 		if isCoinLive(coin) and me.Parent and stillFarming() then
 			touch(coin)
@@ -3354,7 +3429,7 @@ do
 				end
 			else
 				if not hiding then forceNoclip = false end
-				if not inRound(LP) then localCount, displaced = 0, 0 end
+				if not inRound(LP) then localCount, displaced, rangeFails, rangeDead = 0, 0, 0, false end
 				task.wait(0.3)
 			end
 			coinLabel:Set("Collected this round: " .. coinsHeld())
