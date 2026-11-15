@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.15.0"
+local VERSION = "1.16.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -2797,6 +2797,7 @@ local resetButton = Config:AddButton({ Text = "Reset To Defaults" })
 local About = Settings:AddGroup("About", "Right")
 About:AddLabel(NAME .. " v" .. VERSION, { Bold = true })
 About:AddLabel("Murder Mystery 2", { Color = Library.Theme.TextDim })
+State.statsLabel = About:AddLabel("Usage stats: loading...", { Color = Library.Theme.TextDim })
 About:AddDivider()
 About:AddLabel("X and _ shrink the window into a small bar. Click the bar to open it again. Unload stops the script.")
 
@@ -3115,6 +3116,48 @@ on(LP.CharacterAdded, function()
 		Options.safe_spot:Set(false)
 	end
 end)
+
+------------------------------------------------------------------------
+-- Usage tracker: one "exec" when the script starts, then a "ping" every 3 min while it runs.
+-- The server (tracker/worker.js) hashes the UserId before storing it. Empty URL = tracker off.
+------------------------------------------------------------------------
+do
+	local STATS_URL = "" -- e.g. "https://xpware-stats.yourname.workers.dev"
+	local req = (typeof(request) == "function" and request)
+		or (typeof(http_request) == "function" and http_request)
+		or (typeof(syn) == "table" and typeof(syn.request) == "function" and syn.request)
+		or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
+		or (typeof(fluxus) == "table" and typeof(fluxus.request) == "function" and fluxus.request)
+
+	local function send(kind)
+		local ok, res = pcall(req, {
+			Url = STATS_URL .. "/hit",
+			Method = "POST",
+			Headers = { ["Content-Type"] = "application/json" },
+			Body = HttpService:JSONEncode({ uid = tostring(LP.UserId), kind = kind, v = VERSION }),
+		})
+		if not (ok and type(res) == "table" and res.StatusCode == 200) then return nil end
+		local okJson, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
+		return okJson and type(data) == "table" and data or nil
+	end
+
+	if STATS_URL == "" or not req then
+		State.statsLabel:Set(req and "Usage stats: off" or "Usage stats: your executor can't send web requests")
+	else
+		task.spawn(function()
+			local s = send("exec")
+			if s and s.players then
+				State.statsLabel:Set(string.format("%d online | %d players | %d runs", s.online, s.players, s.executions))
+			else
+				State.statsLabel:Set("Usage stats: server didn't answer")
+			end
+			while running() do
+				task.wait(180)
+				if running() then send("ping") end
+			end
+		end)
+	end
+end
 
 loader:Step("Ready.", 0.35)
 if Library.Gui then Library.Gui.Enabled = true end

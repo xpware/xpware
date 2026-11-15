@@ -1,0 +1,13 @@
+name = "xpware-stats"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "xpware-stats"
+database_id = "PASTE_THE_ID_FROM_wrangler_d1_create_HERE"
+
+[vars]
+# change this to any random string before the first deploy and never again
+# (changing it later makes every existing player count as new)
+SALT = "change-me-to-something-random"
