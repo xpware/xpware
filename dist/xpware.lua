@@ -1659,7 +1659,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.0"
+local VERSION = "1.0.1"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -2810,7 +2810,11 @@ do
 	local sheriffLabel = RolesBox:AddLabel("Sheriff: -")
 	local myRoleLabel = RolesBox:AddLabel("You: -")
 
+	-- who has already been announced this round. Only forgotten once the round is really over
+	-- (nobody holds a role for a few seconds): the murderer can die while the hero is still alive,
+	-- and resetting then re-announced the hero every tick.
 	local announced = {}
+	local emptySince
 	task.spawn(function()
 		while running() do
 			local m = anyoneWith("Murderer")
@@ -2818,16 +2822,24 @@ do
 			murdererLabel:Set("Murderer: " .. (m and m.DisplayName or "-"))
 			sheriffLabel:Set("Sheriff: " .. (s and s.DisplayName or "-"))
 			myRoleLabel:Set("You: " .. (inRound(LP) and roleOf(LP) or "-"))
-			if not m then announced = {} end -- between rounds, so the next round's roles get announced
+			if m or s then
+				emptySince = nil
+			else
+				emptySince = emptySince or os.clock()
+				if os.clock() - emptySince > 5 then announced = {} end
+			end
 			if Flags.role_notify then
 				if m and announced.m ~= m then
 					announced.m = m
 					notify(m == LP and "You're the murderer." or (m.DisplayName .. " is the murderer."), "Murderer", 6)
 				end
-				if s and announced.s ~= s then
-					announced.s = s
+				if s then
 					local r = roleOf(s)
-					notify(s == LP and ("You're the " .. r:lower() .. ".") or (s.DisplayName .. " is the " .. r:lower() .. "."), r, 6)
+					local key = s.Name .. ":" .. r -- a new person, or the same person becoming hero
+					if announced.s ~= key then
+						announced.s = key
+						notify(s == LP and ("You're the " .. r:lower() .. ".") or (s.DisplayName .. " is the " .. r:lower() .. "."), r, 6)
+					end
 				end
 			end
 			task.wait(0.5)
