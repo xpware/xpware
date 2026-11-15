@@ -1502,6 +1502,64 @@ function Library:CreateWindow(opt)
 			return setmetatable({ _content = content, _order = 0 }, Group)
 		end
 
+		-- a big on/off switch across the top of the tab; both columns move down to make room.
+		-- Behaves like AddToggle (Flags, Options, Set, OnChanged, Callback), one per tab.
+		function tab:AddMasterToggle(flag, o)
+			o = o or {}
+			if tab._master then return tab._master end
+			local T = element({ Type = "Toggle", Value = false })
+			local BANNER_H = 50
+			for _, col in ipairs({ tab._left, tab._right }) do
+				col.Position = col.Position + px(0, BANNER_H)
+				col.Size = col.Size - px(0, BANNER_H)
+			end
+
+			local card = new("TextButton", {
+				Parent = page, Position = px(12, 12), Size = ud(1, -24, 0, 36),
+				BackgroundColor3 = Theme.White, BackgroundTransparency = 0, corner(4),
+			})
+			-- the gradient tints only the card itself; every label is a child, so text keeps its color
+			local cardGrad = gradient(G.Button); cardGrad.Parent = card
+			local edge = stroke(Theme.GroupBorder, 1); edge.Parent = card
+
+			local check = new("Frame", { Parent = card, Position = px(12, 9), Size = px(18, 18), BackgroundColor3 = Theme.White, stroke(Theme.CheckBorder) })
+			local checkGrad = gradient(G.Check, 45); checkGrad.Parent = check
+			local mark = new("Frame", { Parent = check, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), Visible = false })
+			segment(mark, 3, 9, 7, 13.5, 2.5, Theme.Check)
+			segment(mark, 6.5, 13.5, 15, 4, 2.5, Theme.Check)
+
+			new("TextLabel", {
+				Parent = card, Position = px(40, 0), Size = ud(1, -120, 1, 0), Text = o.Text or flag,
+				FontFace = FONT_BOLD, TextSize = 16, TextColor3 = Theme.ButtonText, TextXAlignment = Enum.TextXAlignment.Left,
+			})
+			local state = new("TextLabel", {
+				Parent = card, Position = ud(1, -72, 0, 0), Size = px(60, 36),
+				FontFace = FONT_BOLD, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Right,
+			})
+
+			local function apply(v, doFire)
+				v = v and true or false
+				T.Value = v
+				Library.Flags[flag] = v
+				mark.Visible = v
+				state.Text = v and "ON" or "OFF"
+				state.TextColor3 = v and Theme.Check or Theme.TextDim
+				edge.Color = v and Theme.Check or Theme.GroupBorder
+				edge.Thickness = v and 2 or 1
+				if doFire then fire(T, o.Callback, v) end
+			end
+			function T:Set(v) apply(v, true) end
+
+			connect(card.MouseButton1Click, function() apply(not T.Value, true) end)
+			connect(card.MouseEnter, function() checkGrad.Color = seq(G.CheckHover) end)
+			connect(card.MouseLeave, function() checkGrad.Color = seq(G.Check) end)
+			apply(o.Default, false)
+			Library:_tooltip(card, o.Tooltip)
+			Library.Options[flag] = T
+			tab._master = T
+			return T
+		end
+
 		table.insert(W.Tabs, tab)
 		if index == 1 then tab:Select() end
 		return tab

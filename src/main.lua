@@ -2,7 +2,7 @@
 	xpware - Murder Mystery 2
 	Engine: Roblox client (executor)  |  Language: Luau
 
-	Built tab by tab. Done: ESP, Teleport, Combat, Autofarm > Gun, Misc > Gun Drop Notifier.
+	Built tab by tab. Done: ESP, Teleport (incl. dropped gun), Combat, master switches.
 	Everything else is still a stub.
 	Where the library comes from:
 	  - bundled by build.ps1: `Library` is defined above this file
@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.9"
+local VERSION = "0.9.1"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -541,11 +541,10 @@ end
 -- ESP
 ------------------------------------------------------------------------
 local ESP = Window:AddTab("ESP")
+ESP:AddMasterToggle("esp_enabled", { Text = "ESP", Default = true, Tooltip = "Master switch for all ESP: players, gun and coins" })
 
 local EspPlayers = ESP:AddGroup("Players", "Left")
 -- these are all read every frame from Flags, so they don't need callbacks
-EspPlayers:AddToggle("esp_enabled", { Text = "ESP Enabled", Default = true, Tooltip = "Master switch for all ESP: players, gun and coins" })
-EspPlayers:AddDivider()
 EspPlayers:AddToggle("esp_murderer", { Text = "Murderer", Default = true })
 EspPlayers:AddToggle("esp_sheriff", { Text = "Sheriff / Hero", Default = true })
 EspPlayers:AddToggle("esp_innocent", { Text = "Innocents" })
@@ -728,6 +727,7 @@ do
 	local killing = false
 	local function killAll()
 		if killing then return end
+		if not Flags.combat_enabled then notify("Combat is switched off.") return end
 		local knife = hasTool(LP, "Knife")
 		if not knife then notify("You're not the murderer.") return end
 		local victims = aliveOthers()
@@ -754,6 +754,7 @@ do
 	-- the game, and a method call in there would overwrite the namecall the original is about to use.
 	local function updateAim()
 		Aim.gun, Aim.throw = nil, nil
+		if not Flags.combat_enabled then return end
 		if Flags.silent_aim then
 			local m = findRole("Murderer")
 			if m then Aim.gun = aimPoint(m, Flags.aim_part) end
@@ -829,7 +830,7 @@ do
 	task.spawn(function()
 		local lastErr
 		while running() do
-			if not busy and inRound(LP) then
+			if Flags.combat_enabled and not busy and inRound(LP) then
 				local ok, err = pcall(function()
 					if Flags.auto_shoot then shootMurderer(true) end
 					if Flags.knife_aura then knifeAura() end
@@ -847,6 +848,7 @@ do
 	-- tab
 	------------------------------------------------------------------
 	local Combat = Window:AddTab("Combat")
+	Combat:AddMasterToggle("combat_enabled", { Text = "Combat", Default = true, Tooltip = "Master switch for every combat feature" })
 
 	local SheriffBox = Combat:AddGroup("Sheriff", "Left")
 	SheriffBox:AddToggle("silent_aim", { Text = "Silent Aim", Tooltip = "Gun shots land on the murderer wherever you click", Callback = function(v)
@@ -859,6 +861,7 @@ do
 	SheriffBox:AddSlider("prediction", { Text = "Prediction", Min = 0, Max = 300, Default = 120, Suffix = " ms", Tooltip = "Leads the target by their velocity (gun and knife throws)" })
 	SheriffBox:AddToggle("auto_shoot", { Text = "Auto Shoot Murderer", Tooltip = "Shoots as soon as you have line of sight. Works without Silent Aim." })
 	SheriffBox:AddKeybind("shoot_key", { Text = "Shoot Murderer", Default = Enum.KeyCode.E, Callback = function()
+		if not Flags.combat_enabled then notify("Combat is switched off.", nil, 2) return end
 		local ok, why = shootMurderer(false)
 		if not ok and why then notify("Can't shoot: " .. why .. ".", nil, 2) end
 	end })
@@ -900,6 +903,62 @@ ToPlayer:AddButton({ Text = "Teleport To Player", Callback = function()
 end })
 ToPlayer:AddButton({ Text = "Teleport To Murderer", Callback = function() tpPlayer(findRole("Murderer"), "Murderer") end })
 ToPlayer:AddButton({ Text = "Teleport To Sheriff", Callback = function() tpPlayer(findSheriff(), "Sheriff") end })
+
+-- dropped gun: picked up by touching Workspace.<Map>.GunDrop
+do
+	local grabbing = false
+	local triedGun, tries = nil, 0 -- give up on a gun after a couple of failed attempts
+
+	-- returns true if we ended up holding the gun; `manual` says why it didn't happen
+	local function grabGun(manual)
+		local function why(msg) if manual then notify(msg) end return false end
+		if grabbing then return false end
+		local gun = partOf(State.gun)
+		if not gun then return why("The gun isn't dropped.") end
+		if hasTool(LP, "Gun") then return why("You already have the gun.") end
+		if roleOf(LP) == "Murderer" then return why("The murderer can't pick up the gun.") end
+		local me = myRoot()
+		if not (me and inRound(LP)) then return why("You need to be alive in the round.") end
+
+		grabbing = true
+		local home = me.CFrame
+		local t0 = os.clock()
+		-- stand on it until the touch registers and the gun lands in the backpack
+		while os.clock() - t0 < 1.5 and gun.Parent and not hasTool(LP, "Gun") and myRoot() do
+			teleport(gun.CFrame + Vector3.new(0, 2.5, 0), true)
+			if typeof(firetouchinterest) == "function" then
+				pcall(firetouchinterest, myRoot(), gun, 0)
+				pcall(firetouchinterest, myRoot(), gun, 1)
+			end
+			task.wait(0.1)
+		end
+		local got = hasTool(LP, "Gun") ~= nil
+		if Flags.gun_return and myRoot() then teleport(home, true) end
+		grabbing = false
+		notify(got and "Grabbed the gun." or "Couldn't pick up the gun.", "Gun", 3)
+		return got
+	end
+
+	task.spawn(function()
+		while running() do
+			local gun = State.gun
+			if Flags.grab_gun and gun and gun.Parent and not grabbing then
+				if gun ~= triedGun then triedGun, tries = gun, 0 end
+				if tries < 2 and not hasTool(LP, "Gun") and roleOf(LP) ~= "Murderer" and inRound(LP) then
+					tries += 1
+					pcall(grabGun, false)
+				end
+			end
+			task.wait(0.5)
+		end
+	end)
+
+	local GunBox = Teleport:AddGroup("Dropped Gun", "Left")
+	GunBox:AddToggle("grab_gun", { Text = "Auto Teleport To Gun", Tooltip = "Teleports onto the gun as soon as it drops and picks it up" })
+	GunBox:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Tooltip = "Takes you back to where you were" })
+	GunBox:AddToggle("gun_notify", { Text = "Notify When Dropped", Default = true, Tooltip = "Pops a notification when the sheriff drops the gun" })
+	GunBox:AddButton({ Text = "Grab Gun Now", Callback = function() grabGun(true) end })
+end
 
 ------------------------------------------------------------------------
 -- Trolling
@@ -952,34 +1011,12 @@ Fly:AddKeybind("fly_key", { Text = "Fly Key", Default = Enum.KeyCode.F, Callback
 Fly:AddSlider("fly_speed", { Text = "Fly Speed", Min = 10, Max = 150, Default = 50, Callback = stub })
 
 ------------------------------------------------------------------------
--- Graphics
-------------------------------------------------------------------------
-local Graphics = Window:AddTab("Graphics")
-
-local LightingGroup = Graphics:AddGroup("Lighting", "Left")
-LightingGroup:AddToggle("fullbright", { Text = "Fullbright", Callback = stub })
-LightingGroup:AddToggle("no_fog", { Text = "No Fog", Callback = stub })
-LightingGroup:AddToggle("no_shadows", { Text = "No Shadows", Callback = stub })
-LightingGroup:AddToggle("custom_time", { Text = "Custom Time", Callback = stub })
-LightingGroup:AddSlider("clock_time", { Text = "Time Of Day", Min = 0, Max = 24, Default = 14, Rounding = 1, Suffix = "h", Callback = stub })
-
-local CameraGroup = Graphics:AddGroup("Camera", "Right")
-CameraGroup:AddSlider("fov", { Text = "Field of View", Min = 70, Max = 120, Default = 70, Callback = stub })
-CameraGroup:AddToggle("unlock_zoom", { Text = "Unlock Zoom", Callback = stub })
-CameraGroup:AddToggle("fps_boost", { Text = "FPS Boost", Tooltip = "Strips materials, textures and particles", Callback = stub })
-
-local XrayGroup = Graphics:AddGroup("X-Ray", "Right")
-XrayGroup:AddToggle("xray", { Text = "X-Ray Map", Callback = stub })
-XrayGroup:AddSlider("xray_amount", { Text = "Wall Transparency", Min = 10, Max = 90, Default = 60, Suffix = "%", Callback = stub })
-
-------------------------------------------------------------------------
 -- Misc
 ------------------------------------------------------------------------
 local Misc = Window:AddTab("Misc")
 
 local Roles = Misc:AddGroup("Roles", "Left")
 Roles:AddToggle("role_notify", { Text = "Role Notifier", Default = true, Callback = stub })
-Roles:AddToggle("gun_notify", { Text = "Gun Drop Notifier", Default = true, Tooltip = "Pops a notification when the sheriff drops the gun" })
 local murdererLabel = Roles:AddLabel("Murderer: -")
 local sheriffLabel = Roles:AddLabel("Sheriff: -")
 local myRoleLabel = Roles:AddLabel("You: -")
@@ -995,6 +1032,7 @@ Server:AddButton({ Text = "Copy Server ID", Callback = stub })
 -- Autofarm
 ------------------------------------------------------------------------
 local Autofarm = Window:AddTab("Autofarm")
+Autofarm:AddMasterToggle("autofarm_enabled", { Text = "Autofarm", Default = true, Tooltip = "Master switch for every autofarm feature" })
 
 local Coins = Autofarm:AddGroup("Coins", "Left")
 Coins:AddToggle("coin_farm", { Text = "Auto Collect Coins", Callback = stub })
@@ -1004,61 +1042,6 @@ Coins:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Def
 Coins:AddToggle("reset_full", { Text = "Reset When Bag Full", Callback = stub })
 Coins:AddSlider("bag_size", { Text = "Bag Size", Min = 10, Max = 50, Default = 40, Tooltip = "40 normally, 50 with Elite", Callback = stub })
 local coinLabel = Coins:AddLabel("Collected this round: 0")
-
--- dropped gun: picked up by touching Workspace.<Map>.GunDrop
-do
-	local grabbing = false
-	local triedGun, tries = nil, 0 -- give up on a gun after a couple of failed attempts
-
-	-- returns true if we ended up holding the gun; `manual` says why it didn't happen
-	local function grabGun(manual)
-		local function why(msg) if manual then notify(msg) end return false end
-		if grabbing then return false end
-		local gun = partOf(State.gun)
-		if not gun then return why("The gun isn't dropped.") end
-		if hasTool(LP, "Gun") then return why("You already have the gun.") end
-		if roleOf(LP) == "Murderer" then return why("The murderer can't pick up the gun.") end
-		local me = myRoot()
-		if not (me and inRound(LP)) then return why("You need to be alive in the round.") end
-
-		grabbing = true
-		local home = me.CFrame
-		local t0 = os.clock()
-		-- stand on it until the touch registers and the gun lands in the backpack
-		while os.clock() - t0 < 1.5 and gun.Parent and not hasTool(LP, "Gun") and myRoot() do
-			teleport(gun.CFrame + Vector3.new(0, 2.5, 0), true)
-			if typeof(firetouchinterest) == "function" then
-				pcall(firetouchinterest, myRoot(), gun, 0)
-				pcall(firetouchinterest, myRoot(), gun, 1)
-			end
-			task.wait(0.1)
-		end
-		local got = hasTool(LP, "Gun") ~= nil
-		if Flags.gun_return and myRoot() then teleport(home, true) end
-		grabbing = false
-		notify(got and "Grabbed the gun." or "Couldn't pick up the gun.", "Gun", 3)
-		return got
-	end
-
-	task.spawn(function()
-		while running() do
-			local gun = State.gun
-			if Flags.grab_gun and gun and gun.Parent and not grabbing then
-				if gun ~= triedGun then triedGun, tries = gun, 0 end
-				if tries < 2 and not hasTool(LP, "Gun") and roleOf(LP) ~= "Murderer" and inRound(LP) then
-					tries += 1
-					pcall(grabGun, false)
-				end
-			end
-			task.wait(0.5)
-		end
-	end)
-
-	local GunBox = Autofarm:AddGroup("Gun", "Right")
-	GunBox:AddToggle("grab_gun", { Text = "Auto Grab Dropped Gun", Tooltip = "Teleports onto the gun as soon as it drops and picks it up" })
-	GunBox:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Tooltip = "Takes you back to where you were" })
-	GunBox:AddButton({ Text = "Grab Gun Now", Callback = function() grabGun(true) end })
-end
 
 ------------------------------------------------------------------------
 -- Fun
