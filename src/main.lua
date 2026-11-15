@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.12.0"
+local VERSION = "1.13.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -517,6 +517,7 @@ local function tpPlayer(p, label)
 end
 
 -- safe spot: a platform only we can see, 300 studs above where we were standing
+local forceNoclip = false -- the coin farm and the safe spot climb turn on noclip through this
 local safePart, safeReturn
 local function setSafeSpot(on)
 	if on then
@@ -534,7 +535,31 @@ local function setSafeSpot(on)
 		safePart.Transparency = 0.5
 		safePart.Position = r.Position + Vector3.new(0, 300, 0)
 		safePart.Parent = workspace
-		teleport(safePart.CFrame + Vector3.new(0, 3.5, 0), true)
+		local goal = safePart.CFrame + Vector3.new(0, 3.5, 0)
+		if State.smoothSafe then
+			State.smoothSafe = false
+			-- a 300 stud jump in one frame looks like a teleport to the server, so climb at a steady pace instead
+			local part = safePart
+			task.spawn(function()
+				forceNoclip = true
+				local pos, t = r.Position, 0
+				while running() and safePart == part and myRoot() do
+					local dt = math.min(RunService.Heartbeat:Wait(), 0.05)
+					t += dt
+					local remaining = (goal.Position - pos).Magnitude
+					if remaining < 0.1 then break end
+					local sp = 30 * math.clamp(math.min(t / 0.4, remaining / 12), 0.15, 1)
+					pos += (goal.Position - pos).Unit * math.min(sp * dt, remaining)
+					local root = myRoot()
+					if not root then break end
+					LP.Character:PivotTo(CFrame.new(pos) * root.CFrame.Rotation)
+					root.AssemblyLinearVelocity = Vector3.zero
+				end
+				forceNoclip = false
+			end)
+		else
+			teleport(goal, true)
+		end
 	else
 		if safeReturn and myRoot() then teleport(safeReturn) end
 		if safePart then safePart:Destroy() end
@@ -582,7 +607,6 @@ EspItems:AddToggle("gun_esp", { Text = "Dropped Gun", Default = true })
 EspItems:AddToggle("coin_esp", { Text = "Coins", Callback = function(v) if not v then clearCoinEsp() end end })
 
 local busy = false        -- true while a fling is driving the character
-local forceNoclip = false -- the coin farm turns on noclip through this while it glides
 
 loader:Step("Hooking combat and aim assist...")
 ------------------------------------------------------------------------
@@ -1428,6 +1452,16 @@ do
 	CoinsBox:AddSlider("bag_size", { Text = "Bag Size", Min = 10, Max = 50, Default = 40, Tooltip = "40 normally, 50 with Elite" })
 	local coinLabel = CoinsBox:AddLabel("Collected this round: 0")
 
+	local sendReport -- defined below, with the rest of the report code
+	local HookBox = Autofarm:AddGroup("Discord Report", "Right")
+	HookBox:AddTextbox("hook_url", { Text = "Webhook", Placeholder = "paste your Discord webhook link", Tooltip = "Kept on this computer only. Reports go straight to this link" })
+	HookBox:AddToggle("hook_enabled", { Text = "Send Coin Reports", Tooltip = "Posts how many coins you've picked up to your Discord channel" })
+	HookBox:AddSlider("hook_interval", { Text = "Report Every", Min = 1, Max = 60, Default = 10, Suffix = " min" })
+	HookBox:AddSlider("hook_hours", { Text = "Keep Reporting For", Min = 0, Max = 24, Default = 0, Rounding = 1, Suffix = " h", Tooltip = "0 keeps reporting until you turn it off" })
+	HookBox:AddButton({ Text = "Send Test Report", Callback = function()
+		task.spawn(function() if sendReport("test") then notify("Sent a test report.", "Report", 3) end end)
+	end })
+
 	-- lying on your back keeps the whole body a stud or two tall
 	local FLAT = CFrame.Angles(math.rad(90), 0, 0)
 	local HIDE_DEPTH = 12 -- studs below the lowest coin: where we wait when there's nothing to take
@@ -1442,6 +1476,8 @@ do
 
 	-- the game's own per-round count when it's in the player data, otherwise our own tally
 	local localCount = 0
+	local sessionCoins, roundsDone = 0, 0 -- all rounds since the script started (for the Discord report)
+	local function gotCoin() localCount += 1; sessionCoins += 1 end
 	local function coinsHeld()
 		local d = dataOf(LP)
 		return (d and tonumber(d.Coins)) or localCount
@@ -1550,38 +1586,52 @@ do
 		end
 	end
 
+	-- One smooth move. It eases up to speed and back down (never above the server's limit, with a little
+	-- natural variation in pace) and is stepped by the real time of each frame, so a slow frame can't turn
+	-- into a jump. `keepGoing` ends it early; the pin carries the character each frame.
+	local function moveTo(target, speed, keepGoing)
+		local me = myRoot()
+		if not me then return end
+		local v = math.min(speed * (0.94 + math.random() * 0.1), 41)
+		local ramp = 0.25
+		local pos = pin and pin.Position or me.Position
+		local t = 0
+		while hiding and keepGoing() do
+			local remaining = (target - pos).Magnitude
+			if remaining < 0.1 then
+				pin = CFrame.new(target) * FLAT
+				return
+			end
+			local dt = math.min(RunService.Heartbeat:Wait(), 0.05)
+			t += dt
+			local sp = v * math.clamp(math.min(t / ramp, remaining / (v * ramp)), 0.12, 1)
+			pos += (target - pos).Unit * math.min(sp * dt, remaining)
+			pin = CFrame.new(pos) * FLAT
+		end
+	end
+
 	local function surface(settle)
 		if not hiding then return end
+		local me = myRoot()
+		-- alive on the map: back to where we were (or a spawn if that's somehow unknown)
+		local home = me and State.map and inRound(LP) and (homeCF and uprightAt(homeCF.Position, homeCF) or spawnCFrame(State.map)) or nil
+		if settle and home and pin and running() then
+			-- glide back instead of jumping there: a jump that long is what trips "invalid position"
+			moveTo(home.Position, math.min(Flags.glide_speed or 28, 42), function() return running() and inRound(LP) end)
+		end
 		hiding, pin = false, nil
 		forceNoclip = false
-		local me, h = myRoot(), myHum()
+		local h = myHum()
 		if h then h.PlatformStand = false end
-		if me then
-			if State.map and inRound(LP) then
-				-- alive on the map: back up to where we were (or a spawn if that's somehow unknown)
-				local target = homeCF and uprightAt(homeCF.Position, homeCF) or spawnCFrame(State.map)
-				if target then standUp(target, settle) end
-			else
-				-- between rounds the game moves us itself; just get off our back where we are
-				standUp(uprightAt(me.Position, me.CFrame), settle)
-			end
+		local root = myRoot()
+		if root then
+			-- between rounds the game moves us itself; just get off our back where we are
+			standUp(home or uprightAt(root.Position, root.CFrame), settle)
 		end
 		homeCF = nil
 	end
 
-	local function glideTo(target, speed)
-		local me = myRoot()
-		if not me then return end
-		local start = me.Position
-		local dur = (target - start).Magnitude / speed
-		local t0 = os.clock()
-		while hiding and stillFarming() do
-			local a = dur > 0 and math.min((os.clock() - t0) / dur, 1) or 1
-			pin = CFrame.new(start:Lerp(target, a)) * FLAT
-			if a >= 1 then return end
-			RunService.Heartbeat:Wait()
-		end
-	end
+	local function glideTo(target, speed) moveTo(target, speed, stillFarming) end
 
 	local function holdFor(maxTime, done)
 		local t0 = os.clock()
@@ -1638,7 +1688,7 @@ do
 				break
 			end
 		end
-		if got then localCount += 1 end
+		if got then gotCoin() end
 
 		-- a short breather before heading for the next coin
 		holdFor(0.18 + math.random() * 0.12, function() return false end)
@@ -1671,25 +1721,168 @@ do
 				me.AssemblyLinearVelocity = Vector3.zero
 				task.wait()
 			end
-			if not isCoinLive(coin) then localCount += 1 end
+			if not isCoinLive(coin) then gotCoin() end
 		end
 		task.wait(0.18 + math.random() * 0.12) -- a short breather before the next coin
 		return true
 	end
 
-	-- Once the round's coins are all taken (or the bag is full) there's nothing left to farm: stand back
-	-- up and park at the safe spot, the same platform as the Safe Spot toggle. It's put away again when
-	-- the round ends.
+	-- Once the round's coins are all taken (or the bag is full) there's nothing left to farm. Rise a few
+	-- studs right where we are (no jump back to where we started), stand up, then climb to the safe spot,
+	-- the same platform as the Safe Spot key. It's put away again when the round ends.
 	local parked = false
 	local function parkAtSafeSpot(why)
 		parked = true
-		if hiding then surface(true) end
+		local me = myRoot()
+		if hiding and me and pin then
+			local up = pin.Position + Vector3.new(0, 8, 0)
+			moveTo(up, glideSpeed(), running)
+			hiding, pin = false, nil
+			forceNoclip = false
+			local h = myHum()
+			if h then h.PlatformStand = false end
+			local root = myRoot()
+			if root then standUp(uprightAt(up, root.CFrame), true) end
+			homeCF = nil
+		end
 		forceNoclip = false
 		if not Flags.safe_spot and myRoot() then
+			State.smoothSafe = true
 			Options.safe_spot:Set(true)
-			notify(why .. " Parked at the safe spot.", "Autofarm", 4)
+			notify(why .. " Climbing to the safe spot.", "Autofarm", 4)
 		end
 	end
+
+	------------------------------------------------------------------
+	-- Discord reports: one embed per report, to the webhook you paste in
+	------------------------------------------------------------------
+	local httpRequest = (typeof(request) == "function" and request)
+		or (typeof(http_request) == "function" and http_request)
+		or (typeof(syn) == "table" and typeof(syn.request) == "function" and syn.request)
+		or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
+		or (typeof(fluxus) == "table" and typeof(fluxus.request) == "function" and fluxus.request)
+		or nil
+
+	-- the "special letters" Discord shows in embeds: sans-serif bold and small caps
+	local function bold(str)
+		return (str:gsub("[%a%d]", function(c)
+			local b = c:byte()
+			if b >= 65 and b <= 90 then return utf8.char(0x1D5D4 + b - 65) end
+			if b >= 97 and b <= 122 then return utf8.char(0x1D5EE + b - 97) end
+			return utf8.char(0x1D7EC + b - 48)
+		end))
+	end
+	local SMALL = { a = "ᴀ", b = "ʙ", c = "ᴄ", d = "ᴅ", e = "ᴇ", f = "ꜰ", g = "ɢ", h = "ʜ", i = "ɪ", j = "ᴊ", k = "ᴋ", l = "ʟ", m = "ᴍ",
+		n = "ɴ", o = "ᴏ", p = "ᴘ", q = "ǫ", r = "ʀ", s = "ꜱ", t = "ᴛ", u = "ᴜ", v = "ᴠ", w = "ᴡ", x = "x", y = "ʏ", z = "ᴢ" }
+	local function small(str) return (str:lower():gsub("%a", SMALL)) end
+
+	local function fmtNum(n)
+		local text = tostring(math.floor(n + 0.5))
+		text = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+		return (text:gsub("^,", ""))
+	end
+	local function fmtTime(sec)
+		sec = math.floor(sec)
+		local h, m, r = math.floor(sec / 3600), math.floor(sec % 3600 / 60), sec % 60
+		if h > 0 then return string.format("%dh %02dm", h, m) end
+		if m > 0 then return string.format("%dm %02ds", m, r) end
+		return r .. "s"
+	end
+	local function meter(frac, cells)
+		local filled = math.clamp(math.floor(frac * cells + 0.5), 0, cells)
+		return string.rep("▰", filled) .. string.rep("▱", cells - filled)
+	end
+	local function validHook(url)
+		if type(url) ~= "string" then return false end
+		return url:match("^https://[%w%.]*discord%.com/api/webhooks/%d+/[%w%-_]+") ~= nil
+			or url:match("^https://[%w%.]*discordapp%.com/api/webhooks/%d+/[%w%-_]+") ~= nil
+	end
+
+	local reportStart, baseCoins, baseRounds -- when reporting began, and the totals at that moment
+
+	local function buildReport(kind)
+		local name = (LP.DisplayName ~= "" and LP.DisplayName) or LP.Name
+		local since = reportStart and (os.clock() - reportStart) or 0
+		local total = sessionCoins - (baseCoins or 0)
+		local rate = since >= 60 and (total / since * 3600) or nil
+		local bag = Flags.bag_size or 40
+		local held = coinsHeld()
+		local frac = math.clamp(held / math.max(bag, 1), 0, 1)
+		local status
+		if parked then status = "+ Parked at the safe spot"
+		elseif stillFarming() and inRound(LP) then status = "+ Farming"
+		elseif inRound(LP) then status = "- Autofarm is off"
+		else status = "- Waiting for a round" end
+
+		local title = "🪙  " .. bold("COIN REPORT")
+		if kind == "test" then title = title .. "  ·  " .. bold("TEST") end
+		if kind == "final" then title = "🏁  " .. bold("FINAL REPORT") end
+		local footer = small("xpware v" .. VERSION)
+		if kind == "report" then footer = footer .. "  •  " .. small("next report in " .. (Flags.hook_interval or 10) .. " min") end
+
+		return {
+			username = "xpware",
+			embeds = { {
+				author = { name = bold("xpware") .. "  •  " .. bold("Autofarm") },
+				title = title,
+				description = table.concat({
+					"> ✦ " .. small("live farm report") .. " ✦",
+					"> " .. small("murder mystery 2") .. "  ·  **" .. name .. "**",
+					"-# " .. small("sent by xpware"),
+				}, "\n"),
+				color = 0x316AC5,
+				fields = {
+					{ name = "🪙  " .. bold("This Round"), value = "```fix\n" .. held .. " / " .. bag .. " coins\n```" .. meter(frac, 10) .. " **" .. math.floor(frac * 100) .. "%**", inline = true },
+					{ name = "💰  " .. bold("Collected"), value = "```yaml\n" .. fmtNum(total) .. " coins\n```", inline = true },
+					{ name = "⚡  " .. bold("Pace"), value = "```ini\n[ " .. (rate and fmtNum(rate) or "--") .. " / hr ]\n```", inline = true },
+					{ name = "🏁  " .. bold("Rounds"), value = "```css\n" .. (roundsDone - (baseRounds or 0)) .. " farmed\n```", inline = true },
+					{ name = "⏱️  " .. bold("Uptime"), value = "```fix\n" .. fmtTime(since) .. "\n```", inline = true },
+					{ name = "📡  " .. bold("Status"), value = "```diff\n" .. status .. "\n```", inline = true },
+				},
+				footer = { text = footer },
+				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+			} },
+		}
+	end
+
+	-- kind: "report" (the regular one), "test" or "final". Returns true if Discord took it.
+	function sendReport(kind)
+		local url = Flags.hook_url
+		if not validHook(url) then notify("Paste a Discord webhook link first (discord.com/api/webhooks/...).", "Report", 5) return false end
+		if not httpRequest then notify("Your executor can't send web requests.", "Report", 5) return false end
+		local ok, res = pcall(httpRequest, {
+			Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" },
+			Body = HttpService:JSONEncode(buildReport(kind)),
+		})
+		local code = ok and type(res) == "table" and (res.StatusCode or res.status_code) or nil
+		if code and code >= 200 and code < 300 then return true end
+		notify("Discord didn't accept the report" .. (code and (" (" .. code .. ")") or "") .. ". Check the webhook link.", "Report", 5)
+		return false
+	end
+
+	task.spawn(function()
+		local lastSent
+		while running() do
+			if Flags.hook_enabled then
+				if not reportStart then
+					reportStart, baseCoins, baseRounds, lastSent = os.clock(), sessionCoins, roundsDone, -math.huge
+				end
+				local now = os.clock()
+				local hours = Flags.hook_hours or 0
+				if hours > 0 and now >= reportStart + hours * 3600 then
+					sendReport("final")
+					notify("Reported for " .. hours .. " h as asked, so reports are off now.", "Report", 5)
+					Options.hook_enabled:Set(false)
+				elseif now - lastSent >= (Flags.hook_interval or 10) * 60 then
+					lastSent = now
+					task.spawn(sendReport, "report")
+				end
+			else
+				reportStart = nil
+			end
+			task.wait(1)
+		end
+	end)
 
 	task.spawn(function()
 		while running() do
@@ -1719,6 +1912,7 @@ do
 			else
 				if not hiding then forceNoclip = false end
 				if not inRound(LP) then
+					if localCount > 0 then roundsDone += 1 end
 					localCount, displaced, depthIdx = 0, 0, 1
 					if parked then
 						-- the round is over: put the platform away without teleporting back to the old map spot
@@ -2558,6 +2752,7 @@ do
 		local ctl
 		if kind == "toggle" then ctl = group:AddToggle(mainFlag, o)
 		elseif kind == "slider" then ctl = group:AddSlider(mainFlag, o)
+		elseif kind == "keybind" then ctl = group:AddKeybind(mainFlag, o)
 		else ctl = group:AddDropdown(mainFlag, o) end
 		ctl:OnChanged(function(v) if real.Value ~= v then real:Set(v) end end)
 		real:OnChanged(function(v) if ctl.Value ~= v then ctl:Set(v) end end)
@@ -2581,7 +2776,10 @@ do
 	local Farm = MainTab:AddGroup("Autofarm", "Left")
 	twin(Farm, "toggle", "autofarm_enabled", { Text = "Autofarm", Tooltip = "Master switch for every autofarm feature" })
 	twin(Farm, "toggle", "coin_farm", { Text = "Auto Collect Coins" })
-	twin(Farm, "toggle", "safe_spot", { Text = "Safe Spot", Tooltip = "Parks you on a platform 300 studs up. Turn off to go back." })
+
+	local Escape = MainTab:AddGroup("Escape", "Left")
+	twin(Escape, "keybind", "safe_spot_key", { Text = "Safe Spot Key" })
+	Escape:AddLabel("Press it to teleport up and away when you need to get out of a situation. Press it again to come back. The autofarm parks there by itself when it's done.", { Color = Library.Theme.TextDim })
 
 	local Fight = MainTab:AddGroup("Combat", "Right")
 	twin(Fight, "toggle", "combat_enabled", { Text = "Combat", Tooltip = "Master switch for every combat feature" })
