@@ -1533,7 +1533,8 @@ end)()
 	xpware - Murder Mystery 2
 	Engine: Roblox client (executor)  |  Language: Luau
 
-	Built tab by tab. Done: ESP, Teleport, Combat. Everything else is still a stub.
+	Built tab by tab. Done: ESP, Teleport, Combat, Autofarm > Gun, Misc > Gun Drop Notifier.
+	Everything else is still a stub.
 	Where the library comes from:
 	  - bundled by build.ps1: `Library` is defined above this file
 	  - Roblox Studio: ReplicatedStorage.xpware.xpui ModuleScript
@@ -1562,7 +1563,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.8.2"
+local VERSION = "0.9"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
@@ -1837,16 +1838,22 @@ local function roleShown(role)
 end
 
 local function updatePlayerEsp()
+	if not Flags.esp_enabled then
+		for _, o in pairs(espObjs) do hideEsp(o) end
+		return
+	end
 	local parts = Flags.esp_parts or {}
 	local me = myRoot()
 	local camera = cam()
 	local vp = camera.ViewportSize
+	-- as the murderer you see everyone, whatever the role toggles say; it lapses when you stop being it
+	local murderMode = Flags.esp_murder_all and roleOf(LP) == "Murderer"
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= LP then
 			local o = espObjs[p] or makeEsp(p)
 			local c, r, h = p.Character, rootOf(p), humOf(p)
 			local role = roleOf(p)
-			local show = c ~= nil and r ~= nil and h ~= nil and h.Health > 0 and roleShown(role)
+			local show = c ~= nil and r ~= nil and h ~= nil and h.Health > 0 and (murderMode or roleShown(role))
 			if show and Flags.esp_round_only and not inRound(p) then show = false end
 			local dist = (show and me) and (r.Position - me.Position).Magnitude or 0
 
@@ -1896,7 +1903,7 @@ gunBB.StudsOffset = Vector3.new(0, 2, 0)
 
 local function updateGunEsp()
 	local gun = State.gun
-	if Flags.gun_esp and gun and gun.Parent then
+	if Flags.esp_enabled and Flags.gun_esp and gun and gun.Parent then
 		set(gunHl, "Adornee", gun)
 		styleHighlight(gunHl, GUN_COLOR, 0.4)
 		set(gunHl, "Enabled", true)
@@ -1919,7 +1926,7 @@ end
 onUnload(clearCoinEsp)
 
 local function updateCoinEsp()
-	if not Flags.coin_esp then clearCoinEsp() return end
+	if not (Flags.esp_enabled and Flags.coin_esp) then clearCoinEsp() return end
 	local coins = liveCoins()
 	if #coins > COIN_ESP_MAX then
 		local me = myRoot()
@@ -2068,9 +2075,12 @@ local ESP = Window:AddTab("ESP")
 
 local EspPlayers = ESP:AddGroup("Players", "Left")
 -- these are all read every frame from Flags, so they don't need callbacks
+EspPlayers:AddToggle("esp_enabled", { Text = "ESP Enabled", Default = true, Tooltip = "Master switch for all ESP: players, gun and coins" })
+EspPlayers:AddDivider()
 EspPlayers:AddToggle("esp_murderer", { Text = "Murderer", Default = true })
 EspPlayers:AddToggle("esp_sheriff", { Text = "Sheriff / Hero", Default = true })
 EspPlayers:AddToggle("esp_innocent", { Text = "Innocents" })
+EspPlayers:AddToggle("esp_murder_all", { Text = "Everyone While Murderer", Default = true, Tooltip = "While you're the murderer, outline everyone even if Innocents is off" })
 EspPlayers:AddToggle("esp_round_only", { Text = "Only Players In Round", Default = true, Tooltip = "Hides dead players and anyone in the lobby" })
 EspPlayers:AddDropdown("esp_parts", { Text = "Draw", Values = { "Chams", "Name", "Role", "Distance", "Health", "Tracer" }, Multi = true, Default = { "Chams", "Name", "Role" } })
 local dataLabel = EspPlayers:AddLabel("Role data: waiting...", { Color = Library.Theme.TextDim })
@@ -2236,35 +2246,36 @@ do
 		stab(knife, victims)
 	end
 
-	-- walk up to everyone alive and stab them, then go back to where you started
+	local function aliveOthers()
+		local list = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LP and inRound(p) then table.insert(list, p) end
+		end
+		return list
+	end
+
+	-- the aura with no range: one swing with every living player in it, wherever they are.
+	-- A couple of follow-up swings catch anyone the first one missed. No teleporting.
+	local killing = false
 	local function killAll()
-		if busy then return end
+		if killing then return end
 		local knife = hasTool(LP, "Knife")
 		if not knife then notify("You're not the murderer.") return end
-		if not myRoot() then notify("You don't have a character right now.") return end
-		busy = true
-		local home = myRoot().CFrame
-		local tried, killed = 0, 0
-		local ok, err = pcall(function()
-			if not equip(knife) then error("couldn't equip the knife") end
-			for _, p in ipairs(Players:GetPlayers()) do
-				if not running() then break end
-				if p ~= LP and inRound(p) then
-					tried += 1
-					local t0 = os.clock()
-					while running() and inRound(p) and myRoot() and os.clock() - t0 < 2 do
-						teleport(rootOf(p).CFrame * CFrame.new(0, 0, 2.5), true)
-						if os.clock() - lastStab >= KNIFE_COOLDOWN then stab(knife, { p }) end
-						task.wait(0.08)
-					end
-					if p.Parent and not inRound(p) then killed += 1 end
-				end
-			end
-		end)
-		if myRoot() then teleport(home, true) end -- back home even if something above errored
-		busy = false
-		if not ok then notify("Kill All stopped: " .. tostring(err)) return end
-		notify(tried == 0 and "Nobody to kill." or string.format("Kill All: %d of %d down.", killed, tried))
+		local victims = aliveOthers()
+		local total = #victims
+		if total == 0 then notify("Nobody to kill.") return end
+		if not equip(knife) then notify("Couldn't equip the knife.") return end
+		killing = true
+		for _ = 1, 3 do
+			local wait = KNIFE_COOLDOWN - (os.clock() - lastStab)
+			if wait > 0 then task.wait(wait) end
+			stab(knife, victims)
+			task.wait(0.35)
+			victims = aliveOthers()
+			if #victims == 0 then break end
+		end
+		killing = false
+		notify(string.format("Kill All: %d of %d down.", total - #victims, total))
 	end
 
 	------------------------------------------------------------------
@@ -2393,7 +2404,7 @@ do
 		end
 	end })
 	MurdererBox:AddDivider()
-	MurdererBox:AddButton({ Text = "Kill All", Tooltip = "Teleports to everyone alive, stabs them, then brings you back", Callback = killAll })
+	MurdererBox:AddButton({ Text = "Kill All", Tooltip = "Stabs everyone alive at once, wherever they are", Callback = killAll })
 end
 
 ------------------------------------------------------------------------
@@ -2499,7 +2510,7 @@ local Misc = Window:AddTab("Misc")
 
 local Roles = Misc:AddGroup("Roles", "Left")
 Roles:AddToggle("role_notify", { Text = "Role Notifier", Default = true, Callback = stub })
-Roles:AddToggle("gun_notify", { Text = "Gun Drop Notifier", Default = true, Callback = stub })
+Roles:AddToggle("gun_notify", { Text = "Gun Drop Notifier", Default = true, Tooltip = "Pops a notification when the sheriff drops the gun" })
 local murdererLabel = Roles:AddLabel("Murderer: -")
 local sheriffLabel = Roles:AddLabel("Sheriff: -")
 local myRoleLabel = Roles:AddLabel("You: -")
@@ -2525,10 +2536,60 @@ Coins:AddToggle("reset_full", { Text = "Reset When Bag Full", Callback = stub })
 Coins:AddSlider("bag_size", { Text = "Bag Size", Min = 10, Max = 50, Default = 40, Tooltip = "40 normally, 50 with Elite", Callback = stub })
 local coinLabel = Coins:AddLabel("Collected this round: 0")
 
-local Gun = Autofarm:AddGroup("Gun", "Right")
-Gun:AddToggle("grab_gun", { Text = "Auto Grab Dropped Gun", Callback = stub })
-Gun:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Callback = stub })
-Gun:AddButton({ Text = "Grab Gun Now", Callback = stub })
+-- dropped gun: picked up by touching Workspace.<Map>.GunDrop
+do
+	local grabbing = false
+	local triedGun, tries = nil, 0 -- give up on a gun after a couple of failed attempts
+
+	-- returns true if we ended up holding the gun; `manual` says why it didn't happen
+	local function grabGun(manual)
+		local function why(msg) if manual then notify(msg) end return false end
+		if grabbing then return false end
+		local gun = partOf(State.gun)
+		if not gun then return why("The gun isn't dropped.") end
+		if hasTool(LP, "Gun") then return why("You already have the gun.") end
+		if roleOf(LP) == "Murderer" then return why("The murderer can't pick up the gun.") end
+		local me = myRoot()
+		if not (me and inRound(LP)) then return why("You need to be alive in the round.") end
+
+		grabbing = true
+		local home = me.CFrame
+		local t0 = os.clock()
+		-- stand on it until the touch registers and the gun lands in the backpack
+		while os.clock() - t0 < 1.5 and gun.Parent and not hasTool(LP, "Gun") and myRoot() do
+			teleport(gun.CFrame + Vector3.new(0, 2.5, 0), true)
+			if typeof(firetouchinterest) == "function" then
+				pcall(firetouchinterest, myRoot(), gun, 0)
+				pcall(firetouchinterest, myRoot(), gun, 1)
+			end
+			task.wait(0.1)
+		end
+		local got = hasTool(LP, "Gun") ~= nil
+		if Flags.gun_return and myRoot() then teleport(home, true) end
+		grabbing = false
+		notify(got and "Grabbed the gun." or "Couldn't pick up the gun.", "Gun", 3)
+		return got
+	end
+
+	task.spawn(function()
+		while running() do
+			local gun = State.gun
+			if Flags.grab_gun and gun and gun.Parent and not grabbing then
+				if gun ~= triedGun then triedGun, tries = gun, 0 end
+				if tries < 2 and not hasTool(LP, "Gun") and roleOf(LP) ~= "Murderer" and inRound(LP) then
+					tries += 1
+					pcall(grabGun, false)
+				end
+			end
+			task.wait(0.5)
+		end
+	end)
+
+	local GunBox = Autofarm:AddGroup("Gun", "Right")
+	GunBox:AddToggle("grab_gun", { Text = "Auto Grab Dropped Gun", Tooltip = "Teleports onto the gun as soon as it drops and picks it up" })
+	GunBox:AddToggle("gun_return", { Text = "Return After Grabbing", Default = true, Tooltip = "Takes you back to where you were" })
+	GunBox:AddButton({ Text = "Grab Gun Now", Callback = function() grabGun(true) end })
+end
 
 ------------------------------------------------------------------------
 -- Fun
@@ -2782,11 +2843,20 @@ local function dataStatus()
 		m and (" | murderer: " .. m) or "") .. mapText
 end
 
--- dropped gun tracking
+-- dropped gun tracking + notifier. The map streams in, so the same gun can show up more than
+-- once as you move around: one notice per few seconds is plenty.
 State.gun = workspace:FindFirstChild("GunDrop", true)
-on(workspace.DescendantAdded, function(d)
-	if d.Name == "GunDrop" then State.gun = d end
-end)
+do
+	local lastNotice = 0
+	on(workspace.DescendantAdded, function(d)
+		if d.Name ~= "GunDrop" then return end
+		State.gun = d
+		if Flags.gun_notify and os.clock() - lastNotice > 5 then
+			lastNotice = os.clock()
+			notify("The gun was dropped.", "Gun", 4)
+		end
+	end)
+end
 on(workspace.DescendantRemoving, function(d)
 	if d == State.gun then State.gun = nil end
 end)
