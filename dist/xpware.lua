@@ -346,20 +346,81 @@ end
 
 -- Interface sounds: a tick when the mouse moves onto a button and a click when it's pressed. They
 -- play locally from SoundService; the slider uses the click sound for now.
+-- The two game sounds below belong to someone else's game, and Roblox keeps most audio private to the
+-- game that owns it, so they may not load here. If one doesn't, a tiny tick / click that ships inside
+-- this script is written to the executor's workspace and used instead.
 local SFX = { hover = "rbxassetid://109956626126666", click = "rbxassetid://112118121103525" }
-local sfxSounds = {}
+local SFX_DATA = {
+	hover = "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",
+	click = "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EErKnINQSkqZcxBKSSmUkkpKrYVSSkqptQIAAAocAAACbNCUWByg0JCVAEAqAIDBcSzL80RRNWXZsSTPE0XTVFXbdizL80TRNFXVti3PE0XTVFXX1XXL80TRVFXVdXXdE0XVVFXXlWXf90TRNFXVdWXZ903TdFXXlWXb9n3TNFXXdWVZtn1hdVXXlWXb1m1jWFXXdWXZtm1dOW7d1nXhF4ZhmNq67vu+LwzH8EwDAMATHACACmxYHeGkaCyw0JCVAEAGAABhDEIGIYUMQkghhZRCSCklAABgwAEAIMCEMlBoyEoAIBUAACDEWmuttdZaYqm11lprrbWGSmuttdZaa6211lprrbXWWmuttdZaa6211lprrbXWWmuttZRSSimllFJKKaWUUkoppZRSSimllFJKKaWUUkoppZRSSimllFJKKaWUUkoppZRSSimllFJKKRUA6FfhAOD/YMPqCCdFY4GFhqwEAMIBAABjlGIMOukkpNQw5RiEUlJJpZVGMecglJJSSq1VzklIpaXWWouxck5KSSm1FluMHYSUWmotxhhj7CCklFprMcYYYyilpRhjrDHWWkNJqbUYY4w111pSai3GWmutufeSUosxxlxr7rmX1mKsteacc849tRZjrTXn3HPwqbUYY8619957UK3FWGuuOQfhewEA3A0OABAJNs6wknRWOBpcaMhKACAkAIBAiDHGnHMOQgghREox5pxzEEIIIYRIKcaccw5CCCGEkDHmnHMQQgihlFIyxpxzDkIIJZRQSuaccxBCCKGUUkrJnHMOQgghlFJKKR10EEIIoZRSSimlcw5CCKGUUkoppYQQQiillFJKKaWUEEIIpZRSSimllBJCCKWUUkoppZRSQgihlFJKKaWkUkoIoZRSSimllFJKCSGUUkoppZRSSimhhFJKKaWUUkopJZRQSimllFJKKqUUAABw4AAAEGAEnWRUWYSNJlx4AAoNWQkAAAEAIM5abClGRjHnIIbIIMQghgopxZy1DCmDHKZMKYSUlc4xhoiTFlsLFQMAAEAQAEAgZAKBAigwkAEABwgJUgBAYYGhQ4QIEKPAwLi4tAEACEJkhkhELAaJCdVAUTEdACwuMOQDQIbGRtrFBXQZ4IIu7joQQhCCEMTiAApIwMEJNzzxhifc4ASdolIHAQAAAABwAAAPAADHBhAR0RxHh8cHSIjICElJAAAAAADgAMAHAMBhAkRENMfR4fEBEiIyQlISAAAAAAAAAAAABAQEAAAAAAACAAAABARPZ2dTAATIDQAAAAAAAPzqQw8CAAAAxKWiqwYwMeWmPmxsbvfWFtk/DrJf1g6IAmgxxlN+6hv9oVl5bebce5YP8du6/dDGTOTlf0dG8W9/fwEcfr/JAXrRhNin2ecJEQwotDTHbvT1p6t/7ji3OCm8nF3Kho+5N7/jqfTGGSi+GGYB2nh1Q0AASrLz+RYJ/6rCEt9R/7Dyx/9lbx3fj4kjco3bYwCQY88VqGpUUqf1kPz5WL/j/3eca7J8+eUI8dCYI7zs6sdVFbDru7s7YSCPr08qXQPwRIupJtdv4rUk33qiofe7b2+//fbbLepJBcrR9nfnZuOfqQYbGxqA0tTjH97aACBNrQtrAJaNjY2NDYCN2X92j5AAuAOh+kmroZp8s5jgsebmJcB+E0zz8nmztmBunjn99c0CpmiYoknPxsbGxj9bdUNDNMD8/Lyc5nXgNYJ5AKdXAcBUoycdJlnn5X57E8+bAH4q/f+5sf1crT9PnWGC3fXm3GOMm5wj567AltcYlQL4/sU96wu/92Pm/s9hFQOAwAIMXjnHPmIIAA8zrMYPmyXRqYnNxoIA1LhFbk4ysdRjhyViX7+E4doW+ouc2bZOrJ4DFuqqLCYpFEwLPd5KSzOvOXPlh3WsPXdzU/QWhHdFX7GL0QT7cgRbTFVnl5eEUZq4+rSqrPpbnYd5yStCn+4mfZIWowA+2fx/rn9KQxPAAfb8ybuA3iPrTaUAAAAA7t/rPwa/Wdfmy1ffuNp1e1bGZ2UZjxQHioOKg2zN1mwhhYxDC76Y/H+67TOOAA6wzfdz5xrmnty5o41CAAAAUOm63GQ17W8j2eG99Tp9P3U92BtXa2+cW8fP9tC/enju4bmil+Ze517nXude84joiOiIaM3BxNGEWk+o9YRGE+eK5ormZu6mZ3oml4d5mBtlAA==",
+}
+local sfxSounds, sfxFallback = {}, {}
+
+local function b64decode(text)
+	local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local index = {}
+	for i = 1, 64 do index[alphabet:byte(i)] = i - 1 end
+	local out, buffer, bits = {}, 0, 0
+	for i = 1, #text do
+		local v = index[text:byte(i)]
+		if v then
+			buffer = buffer * 64 + v
+			bits = bits + 6
+			if bits >= 8 then
+				bits = bits - 8
+				local unit = 2 ^ bits
+				out[#out + 1] = string.char(math.floor(buffer / unit) % 256)
+				buffer = buffer % unit
+			end
+		end
+	end
+	return table.concat(out)
+end
+
+-- our own copy of a sound, as a file the game can play; nil if the executor can't make one
+local function fallbackAsset(kind)
+	if sfxFallback[kind] ~= nil then return sfxFallback[kind] or nil end
+	sfxFallback[kind] = false
+	if typeof(writefile) ~= "function" or typeof(getcustomasset) ~= "function" then return nil end
+	local ok, asset = pcall(function()
+		if typeof(makefolder) == "function" and not (typeof(isfolder) == "function" and isfolder("xpware")) then makefolder("xpware") end
+		local path = "xpware/sfx_" .. kind .. ".ogg"
+		writefile(path, b64decode(SFX_DATA[kind]))
+		return getcustomasset(path)
+	end)
+	if ok and type(asset) == "string" and asset ~= "" then sfxFallback[kind] = asset return asset end
+	return nil
+end
+
+local function sfxSound(kind)
+	local snd = sfxSounds[kind]
+	if snd and snd.Parent then return snd end
+	snd = Instance.new("Sound")
+	snd.Name = "xpui_" .. kind
+	snd.SoundId = SFX[kind]
+	snd.Volume = (kind == "hover") and 0.4 or 0.6
+	snd.Parent = game:GetService("SoundService")
+	sfxSounds[kind] = snd
+	task.spawn(function()
+		pcall(function() game:GetService("ContentProvider"):PreloadAsync({ snd }) end)
+		if snd.Parent and snd.TimeLength <= 0 then
+			local alt = fallbackAsset(kind)
+			if alt then snd.SoundId = alt end
+		end
+	end)
+	return snd
+end
+
+-- create both up front so they've loaded by the time the first button is touched
+function Library:_warmSounds()
+	pcall(sfxSound, "hover")
+	pcall(sfxSound, "click")
+end
+
 local function playSfx(kind)
 	if Library.Unloaded then return end
 	pcall(function()
-		local snd = sfxSounds[kind]
-		if not (snd and snd.Parent) then
-			snd = Instance.new("Sound")
-			snd.Name = "xpui_" .. kind
-			snd.SoundId = SFX[kind]
-			snd.Volume = (kind == "hover") and 0.4 or 0.6
-			snd.Parent = game:GetService("SoundService")
-			sfxSounds[kind] = snd
-		end
+		local snd = sfxSound(kind)
 		snd.TimePosition = 0
 		snd:Play()
 	end)
@@ -1074,6 +1135,7 @@ function Library:ShowLoading(opt)
 	opt = opt or {}
 	local lib = self
 	local RunService = game:GetService("RunService")
+	lib:_warmSounds()
 
 	local gui = new("ScreenGui", {
 		Name = HttpService:GenerateGUID(false):sub(1, 8), ResetOnSpawn = false, IgnoreGuiInset = true,
@@ -1876,7 +1938,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.10.0"
+local VERSION = "1.11.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3260,6 +3322,7 @@ do
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
 	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
 	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
+	CoinsBox:AddSlider("glide_speed", { Text = "Glide Speed", Min = 10, Max = 60, Default = 28, Suffix = " studs/s", Tooltip = "How fast you glide between coins. Higher is quicker but easier to get kicked for. 28 is the safe default" })
 	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
 	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
@@ -3269,9 +3332,9 @@ do
 	-- lying on your back keeps the whole body a stud or two tall
 	local FLAT = CFrame.Angles(math.rad(90), 0, 0)
 	local HIDE_DEPTH = 12 -- studs below the lowest coin: where we wait when there's nothing to take
-	-- A steady pace the server accepts. Jumping straight to each coin (instant moves) got us kicked for
-	-- an invalid position, so every move is a smooth glide at this speed.
-	local SPEED = 28 -- studs per second
+	-- Jumping straight to each coin (instant moves) got us kicked for an invalid position, so every move
+	-- is a smooth glide. The Glide Speed slider sets the pace; its default is one the server accepts.
+	local function glideSpeed() return Flags.glide_speed or 28 end -- studs per second
 	-- How far below a coin to be when taking it, deepest first. We try the deepest and only come up
 	-- (and then stay at that depth) if the server doesn't register the touch from there.
 	local TOUCH_DEPTHS = { 5, 2, 0 }
@@ -3450,7 +3513,7 @@ do
 			-- nothing to take right now: sink to the resting depth, smoothly, and wait
 			local here = pin.Position
 			local rest = Vector3.new(here.X, hideY, here.Z)
-			if (here - rest).Magnitude > 1 then glideTo(rest, SPEED) end
+			if (here - rest).Magnitude > 1 then glideTo(rest, glideSpeed()) end
 			return false
 		end
 
@@ -3458,7 +3521,7 @@ do
 			local y = math.max(coin.Position.Y - depth, workspace.FallenPartsDestroyHeight + 25)
 			return Vector3.new(coin.Position.X, y, coin.Position.Z)
 		end
-		glideTo(spot(TOUCH_DEPTHS[depthIdx]), SPEED)
+		glideTo(spot(TOUCH_DEPTHS[depthIdx]), glideSpeed())
 		if not (hiding and isCoinLive(coin) and stillFarming()) then return true end
 
 		-- take it from underneath; come up a little at a time only if the touch doesn't register
@@ -3492,7 +3555,7 @@ do
 		forceNoclip = true
 		local coin = nextCoin(me, Flags.avoid_murderer)
 		if not coin then return false end
-		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / SPEED, Enum.EasingStyle.Linear),
+		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / glideSpeed(), Enum.EasingStyle.Linear),
 			{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
 		tw:Play()
 		while tw.PlaybackState == Enum.PlaybackState.Playing do
@@ -3515,16 +3578,37 @@ do
 		return true
 	end
 
+	-- Once the round's coins are all taken (or the bag is full) there's nothing left to farm: stand back
+	-- up and park at the safe spot, the same platform as the Safe Spot toggle. It's put away again when
+	-- the round ends.
+	local parked = false
+	local function parkAtSafeSpot(why)
+		parked = true
+		if hiding then surface(true) end
+		forceNoclip = false
+		if not Flags.safe_spot and myRoot() then
+			Options.safe_spot:Set(true)
+			notify(why .. " Parked at the safe spot.", "Autofarm", 4)
+		end
+	end
+
 	task.spawn(function()
 		while running() do
 			local active = stillFarming() and inRound(LP)
 			if hiding and not (active and Flags.farm_hide) then surface(true) end
-			if active then
+			if active and not parked then
 				local ok, moved = pcall(Flags.farm_hide and farmStepHidden or farmStepFloor)
 				if not ok then warn("[xpware] coin farm: " .. tostring(moved)) end
 				if not (ok and moved) then
 					if not hiding then forceNoclip = false end
-					task.wait(0.3) -- nothing to collect right now; if hiding, the pin keeps us safe meanwhile
+					if ok and localCount > 0 and #liveCoins() == 0 then
+						parkAtSafeSpot("Every coin is collected.")
+					else
+						task.wait(0.3) -- nothing to collect right now; if hiding, the pin keeps us safe meanwhile
+					end
+				end
+				if not parked and not Flags.reset_full and coinsHeld() >= (Flags.bag_size or 40) then
+					parkAtSafeSpot("The bag is full.")
 				end
 				if Flags.reset_full and coinsHeld() >= (Flags.bag_size or 40) then
 					local h = myHum()
@@ -3535,7 +3619,17 @@ do
 				end
 			else
 				if not hiding then forceNoclip = false end
-				if not inRound(LP) then localCount, displaced, depthIdx = 0, 0, 1 end
+				if not inRound(LP) then
+					localCount, displaced, depthIdx = 0, 0, 1
+					if parked then
+						-- the round is over: put the platform away without teleporting back to the old map spot
+						parked = false
+						if Flags.safe_spot then
+							safeReturn = nil
+							Options.safe_spot:Set(false)
+						end
+					end
+				end
 				task.wait(0.3)
 			end
 			coinLabel:Set("Collected this round: " .. coinsHeld())

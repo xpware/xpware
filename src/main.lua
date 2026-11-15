@@ -32,7 +32,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.10.0"
+local VERSION = "1.11.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -1416,6 +1416,7 @@ do
 	local CoinsBox = Autofarm:AddGroup("Coins", "Left")
 	CoinsBox:AddToggle("coin_farm", { Text = "Auto Collect Coins", Tooltip = "Collects every coin for you" })
 	CoinsBox:AddToggle("farm_hide", { Text = "Stay Under Map", Default = true, Tooltip = "Lies you flat under the map while farming, so the murderer can't reach you" })
+	CoinsBox:AddSlider("glide_speed", { Text = "Glide Speed", Min = 10, Max = 60, Default = 28, Suffix = " studs/s", Tooltip = "How fast you glide between coins. Higher is quicker but easier to get kicked for. 28 is the safe default" })
 	CoinsBox:AddToggle("avoid_murderer", { Text = "Avoid Murderer", Default = true, Tooltip = "Skips coins near the murderer when you have to pop up to grab one" })
 	CoinsBox:AddSlider("avoid_radius", { Text = "Avoid Radius", Min = 10, Max = 60, Default = 25, Suffix = " studs" })
 	CoinsBox:AddToggle("reset_full", { Text = "Reset When Bag Full", Tooltip = "Resets your character once the bag is full" })
@@ -1425,9 +1426,9 @@ do
 	-- lying on your back keeps the whole body a stud or two tall
 	local FLAT = CFrame.Angles(math.rad(90), 0, 0)
 	local HIDE_DEPTH = 12 -- studs below the lowest coin: where we wait when there's nothing to take
-	-- A steady pace the server accepts. Jumping straight to each coin (instant moves) got us kicked for
-	-- an invalid position, so every move is a smooth glide at this speed.
-	local SPEED = 28 -- studs per second
+	-- Jumping straight to each coin (instant moves) got us kicked for an invalid position, so every move
+	-- is a smooth glide. The Glide Speed slider sets the pace; its default is one the server accepts.
+	local function glideSpeed() return Flags.glide_speed or 28 end -- studs per second
 	-- How far below a coin to be when taking it, deepest first. We try the deepest and only come up
 	-- (and then stay at that depth) if the server doesn't register the touch from there.
 	local TOUCH_DEPTHS = { 5, 2, 0 }
@@ -1606,7 +1607,7 @@ do
 			-- nothing to take right now: sink to the resting depth, smoothly, and wait
 			local here = pin.Position
 			local rest = Vector3.new(here.X, hideY, here.Z)
-			if (here - rest).Magnitude > 1 then glideTo(rest, SPEED) end
+			if (here - rest).Magnitude > 1 then glideTo(rest, glideSpeed()) end
 			return false
 		end
 
@@ -1614,7 +1615,7 @@ do
 			local y = math.max(coin.Position.Y - depth, workspace.FallenPartsDestroyHeight + 25)
 			return Vector3.new(coin.Position.X, y, coin.Position.Z)
 		end
-		glideTo(spot(TOUCH_DEPTHS[depthIdx]), SPEED)
+		glideTo(spot(TOUCH_DEPTHS[depthIdx]), glideSpeed())
 		if not (hiding and isCoinLive(coin) and stillFarming()) then return true end
 
 		-- take it from underneath; come up a little at a time only if the touch doesn't register
@@ -1648,7 +1649,7 @@ do
 		forceNoclip = true
 		local coin = nextCoin(me, Flags.avoid_murderer)
 		if not coin then return false end
-		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / SPEED, Enum.EasingStyle.Linear),
+		local tw = TweenService:Create(me, TweenInfo.new((coin.Position - me.Position).Magnitude / glideSpeed(), Enum.EasingStyle.Linear),
 			{ CFrame = CFrame.new(coin.Position) * me.CFrame.Rotation })
 		tw:Play()
 		while tw.PlaybackState == Enum.PlaybackState.Playing do
@@ -1671,16 +1672,37 @@ do
 		return true
 	end
 
+	-- Once the round's coins are all taken (or the bag is full) there's nothing left to farm: stand back
+	-- up and park at the safe spot, the same platform as the Safe Spot toggle. It's put away again when
+	-- the round ends.
+	local parked = false
+	local function parkAtSafeSpot(why)
+		parked = true
+		if hiding then surface(true) end
+		forceNoclip = false
+		if not Flags.safe_spot and myRoot() then
+			Options.safe_spot:Set(true)
+			notify(why .. " Parked at the safe spot.", "Autofarm", 4)
+		end
+	end
+
 	task.spawn(function()
 		while running() do
 			local active = stillFarming() and inRound(LP)
 			if hiding and not (active and Flags.farm_hide) then surface(true) end
-			if active then
+			if active and not parked then
 				local ok, moved = pcall(Flags.farm_hide and farmStepHidden or farmStepFloor)
 				if not ok then warn("[xpware] coin farm: " .. tostring(moved)) end
 				if not (ok and moved) then
 					if not hiding then forceNoclip = false end
-					task.wait(0.3) -- nothing to collect right now; if hiding, the pin keeps us safe meanwhile
+					if ok and localCount > 0 and #liveCoins() == 0 then
+						parkAtSafeSpot("Every coin is collected.")
+					else
+						task.wait(0.3) -- nothing to collect right now; if hiding, the pin keeps us safe meanwhile
+					end
+				end
+				if not parked and not Flags.reset_full and coinsHeld() >= (Flags.bag_size or 40) then
+					parkAtSafeSpot("The bag is full.")
 				end
 				if Flags.reset_full and coinsHeld() >= (Flags.bag_size or 40) then
 					local h = myHum()
@@ -1691,7 +1713,17 @@ do
 				end
 			else
 				if not hiding then forceNoclip = false end
-				if not inRound(LP) then localCount, displaced, depthIdx = 0, 0, 1 end
+				if not inRound(LP) then
+					localCount, displaced, depthIdx = 0, 0, 1
+					if parked then
+						-- the round is over: put the platform away without teleporting back to the old map spot
+						parked = false
+						if Flags.safe_spot then
+							safeReturn = nil
+							Options.safe_spot:Set(false)
+						end
+					end
+				end
 				task.wait(0.3)
 			end
 			coinLabel:Set("Collected this round: " .. coinsHeld())
