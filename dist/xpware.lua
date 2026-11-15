@@ -1738,7 +1738,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "1.4.0"
+local VERSION = "1.5.0"
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
 ------------------------------------------------------------------------
@@ -3609,6 +3609,256 @@ do
 end
 
 ------------------------------------------------------------------------
+-- Inventory (local only)
+--
+-- The game keeps what you own in the ProfileData module (a map of item -> amount for weapons and
+-- pets, a list of keys for everything else) and refreshes its screens when the local event
+-- Remotes.Inventory.InventoryDataChanged fires with (category, item, amount). Those are the two
+-- steps its own code takes when the server sends a new item, so that's all this does. Nothing is
+-- sent to the server: nobody else sees any of it, and trades and the weapon you really hold use
+-- your real inventory.
+------------------------------------------------------------------------
+do
+	local InventoryTab = Window:AddTab("Inventory")
+
+	local gameModules = ReplicatedStorage:FindFirstChild("Modules")
+	local profileModule = gameModules and gameModules:FindFirstChild("ProfileData")
+	local gameRemotes = ReplicatedStorage:FindFirstChild("Remotes")
+	local invRemotes = gameRemotes and gameRemotes:FindFirstChild("Inventory")
+	local changedEvent = invRemotes and invRemotes:FindFirstChild("InventoryDataChanged")
+	local clientServices = ReplicatedStorage:FindFirstChild("ClientServices")
+	local equipModule = clientServices and clientServices:FindFirstChild("EquipService")
+	local updateClient = ReplicatedStorage:FindFirstChild("UpdateDataClient")
+
+	local CATEGORIES = { "Knives", "Guns", "Effects", "Perks", "Emotes", "Pets", "Radios" }
+	local DATA_CATEGORY = { Knives = "Weapons", Guns = "Weapons", Effects = "Effects", Perks = "Perks",
+		Emotes = "Emotes", Pets = "Pets", Radios = "Radios" }
+	local KEYED = { Weapons = true, Pets = true } -- owned as item -> amount; the rest are lists of keys
+	local RARITY_ORDER = { Unique = 1, Ancient = 2, Godly = 3, Legendary = 4, Rare = 5, Uncommon = 6, Common = 7 }
+
+	-- everything in the game's item database, grouped by the categories above ---------------------
+	local catalog = {}
+	for _, name in ipairs(CATEGORIES) do catalog[name] = {} end
+
+	local function buildCatalog()
+		local ok, sync = pcall(function() return require(ReplicatedStorage.Database.Sync) end)
+		if not (ok and type(sync) == "table") then return false end
+		for _, category in ipairs(CATEGORIES) do
+			local dataCategory = DATA_CATEGORY[category]
+			local source = sync[dataCategory]
+			if type(source) ~= "table" and dataCategory == "Weapons" then source = sync.Item end
+			if type(source) == "table" then
+				local list = catalog[category]
+				for key, info in pairs(source) do
+					if type(key) == "string" and type(info) == "table" then
+						local keep = true
+						if dataCategory == "Weapons" then
+							keep = (category == "Knives" and info.ItemType == "Knife") or (category == "Guns" and info.ItemType == "Gun")
+						elseif dataCategory == "Emotes" then
+							keep = key ~= "Back" and info.AnimationID ~= nil -- no menu button, no Roblox basics
+						end
+						if keep then
+							local name = tostring(info.ItemName or info.Name or info.DisplayName or key)
+							local rarity = tostring(info.Rarity or "Common")
+							table.insert(list, { key = key, info = info, dataCat = dataCategory, name = name,
+								rarity = rarity, label = name .. " (" .. rarity .. ")" })
+						end
+					end
+				end
+				-- rarest first, then by name; a duplicate label gets its key added so it stays pickable
+				table.sort(list, function(a, b)
+					local ra, rb = RARITY_ORDER[a.rarity] or 99, RARITY_ORDER[b.rarity] or 99
+					if ra ~= rb then return ra < rb end
+					return a.name:lower() < b.name:lower()
+				end)
+				local seen = {}
+				for _, e in ipairs(list) do
+					if seen[e.label] then e.label = e.label .. " [" .. e.key .. "]" end
+					seen[e.label] = true
+				end
+			end
+		end
+		return true
+	end
+	local catalogOk = buildCatalog()
+
+	-- the game's own data, and what we've changed in it ------------------------------------------
+	local profileCache
+	local function getProfile()
+		if profileCache then return profileCache end
+		if not profileModule then return nil end
+		local ok, res = pcall(require, profileModule)
+		if ok and type(res) == "table" then profileCache = res end
+		return profileCache
+	end
+
+	local added = {}             -- the entries we put in your inventory
+	local originalEquipped = {}  -- itemType -> what you really had equipped, before our local equips
+
+	local function owns(profile, entry)
+		local pd = profile[entry.dataCat]
+		if type(pd) ~= "table" or type(pd.Owned) ~= "table" then return nil end
+		if KEYED[entry.dataCat] then return pd.Owned[entry.key] ~= nil end
+		return table.find(pd.Owned, entry.key) ~= nil
+	end
+
+	-- returns true if it was added, false if you already have it (or there's nowhere to put it)
+	local function addItem(profile, entry)
+		local have = owns(profile, entry)
+		if have ~= false then return false end
+		local pd = profile[entry.dataCat]
+		if KEYED[entry.dataCat] then
+			pd.Owned[entry.key] = 1
+		else
+			table.insert(pd.Owned, entry.key)
+		end
+		table.insert(added, entry)
+		if changedEvent then changedEvent:Fire(entry.dataCat, entry.key, 1) end
+		return true
+	end
+
+	local function refreshGame(profile)
+		if updateClient then updateClient:Fire(false, profile) end
+	end
+
+	-- puts back your real equipped weapons, locally
+	local function restoreEquipped(profile)
+		local ok, equip = pcall(require, equipModule)
+		for itemType, original in pairs(originalEquipped) do
+			if profile.Weapons and profile.Weapons.Equipped then profile.Weapons.Equipped[itemType] = original end
+			if ok and type(equip) == "table" and equip.EquippedChanged then equip.EquippedChanged:Fire(itemType, original) end
+			originalEquipped[itemType] = nil
+		end
+	end
+
+	local function removeAdded()
+		local profile = getProfile()
+		if not profile then return 0 end
+		restoreEquipped(profile)
+		local n = #added
+		for i = #added, 1, -1 do
+			local e = added[i]
+			local pd = profile[e.dataCat]
+			if type(pd) == "table" and type(pd.Owned) == "table" then
+				if KEYED[e.dataCat] then
+					pd.Owned[e.key] = nil
+				else
+					local at = table.find(pd.Owned, e.key)
+					if at then table.remove(pd.Owned, at) end
+				end
+			end
+			if changedEvent then changedEvent:Fire(e.dataCat, e.key, 0) end
+			added[i] = nil
+		end
+		if n > 0 then refreshGame(profile) end
+		return n
+	end
+	onUnload(function() pcall(removeAdded) end)
+
+	-- the tab ----------------------------------------------------------------------------------
+	local shown, byLabel = {}, {}
+	local itemDropdown, countLabel
+	local working = false
+
+	local function refreshList()
+		local category = Flags.inv_category or "Knives"
+		local query = (Flags.inv_search or ""):lower()
+		shown, byLabel = {}, {}
+		local values = {}
+		for _, e in ipairs(catalog[category] or {}) do
+			if query == "" or e.label:lower():find(query, 1, true) then
+				table.insert(shown, e)
+				byLabel[e.label] = e
+				table.insert(values, e.label)
+			end
+		end
+		itemDropdown:SetValues(values)
+		itemDropdown:Set(values[1])
+		countLabel:Set(#values .. (#values == 1 and " item" or " items"))
+	end
+
+	local function selected()
+		local e = byLabel[Flags.inv_item]
+		if not e then notify("Pick an item first.") end
+		return e
+	end
+
+	local function addSelected()
+		local e = selected()
+		if not e then return end
+		local profile = getProfile()
+		if not profile then notify("The game's inventory data isn't loaded yet.") return end
+		if addItem(profile, e) then
+			refreshGame(profile)
+			notify("Added " .. e.name .. " to your inventory.", "Inventory", 3)
+		else
+			notify("You already have " .. e.name .. ".", "Inventory", 3)
+		end
+	end
+
+	local function addAllShown()
+		if working then return end
+		local profile = getProfile()
+		if not profile then notify("The game's inventory data isn't loaded yet.") return end
+		if #shown == 0 then notify("Nothing is listed.") return end
+		working = true
+		local new, had = 0, 0
+		for i, e in ipairs(shown) do
+			if not running() then break end
+			if addItem(profile, e) then new += 1 else had += 1 end
+			if i % 20 == 0 then task.wait() end -- the game builds a screen entry for each one
+		end
+		refreshGame(profile)
+		working = false
+		notify(string.format("Added %d items (you already had %d).", new, had), "Inventory", 4)
+	end
+
+	-- Equipping is local too: it sets what the game thinks is equipped and tells its equip screen. The
+	-- game's own Equip function also asks the server, which this deliberately never does.
+	local function equipSelected()
+		local e = selected()
+		if not e then return end
+		if e.dataCat ~= "Weapons" then notify("Only knives and guns can be equipped.") return end
+		local profile = getProfile()
+		if not (profile and profile.Weapons and profile.Weapons.Equipped) then
+			notify("The game's inventory data isn't loaded yet.")
+			return
+		end
+		if addItem(profile, e) then refreshGame(profile) end
+		local itemType = e.info.ItemType
+		if originalEquipped[itemType] == nil then originalEquipped[itemType] = profile.Weapons.Equipped[itemType] end
+		profile.Weapons.Equipped[itemType] = e.key
+		local ok, equip = pcall(require, equipModule)
+		if ok and type(equip) == "table" and equip.EquippedChanged then equip.EquippedChanged:Fire(itemType, e.key) end
+		notify(e.name .. " is shown as your equipped " .. itemType:lower() .. ".", "Inventory", 4)
+	end
+
+	local PickBox = InventoryTab:AddGroup("Pick An Item", "Left")
+	PickBox:AddDropdown("inv_category", { Text = "Category", Values = CATEGORIES, Default = "Knives",
+		Callback = function() refreshList() end })
+	PickBox:AddTextbox("inv_search", { Text = "Search", Placeholder = "a name, then press Enter",
+		Tooltip = "Narrows the list below. Add All uses only what's listed", Callback = function() refreshList() end })
+	itemDropdown = PickBox:AddDropdown("inv_item", { Text = "Item", Values = {} })
+	countLabel = PickBox:AddLabel("", { Color = Library.Theme.TextDim })
+	if not catalogOk then
+		PickBox:AddLabel("Couldn't read the game's item database.", { Color = Library.Theme.TextDim })
+	end
+
+	local AddBox = InventoryTab:AddGroup("Your Inventory", "Right")
+	AddBox:AddButton({ Text = "Add Item", Tooltip = "Puts the selected item in your inventory screen", Callback = addSelected })
+	AddBox:AddButton({ Text = "Add All Listed", Tooltip = "Adds every item in the list, including the search results", Callback = function() task.spawn(addAllShown) end })
+	AddBox:AddButton({ Text = "Equip Item (Knife / Gun)", Tooltip = "Shows it as your equipped knife or gun on your screen", Callback = equipSelected })
+	AddBox:AddDivider()
+	AddBox:AddButton({ Text = "Remove What I Added", Callback = function()
+		local n = removeAdded()
+		notify(n > 0 and ("Removed " .. n .. " items.") or "Nothing to remove.", "Inventory", 3)
+	end })
+	AddBox:AddLabel("Only you see this. Trades and the weapon you really hold are unchanged. Equip added items with the button above, not the game's own Equip button.", { Color = Library.Theme.TextDim })
+
+	refreshList()
+end
+
+------------------------------------------------------------------------
 -- Settings (menu controls are UI, so they actually work)
 ------------------------------------------------------------------------
 local Settings = Window:AddTab("Settings")
@@ -3657,6 +3907,7 @@ local NO_SAVE = {
 	tp_target = true, troll_target = true, safe_spot = true,
 	spectate = true, follow = true, orbit = true, freeze = true,
 	theme = true, -- lives in theme.txt so it can be applied before the window exists
+	inv_category = true, inv_search = true, inv_item = true, -- they depend on the list on screen
 }
 
 local function copyValue(v)
