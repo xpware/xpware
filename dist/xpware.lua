@@ -346,6 +346,53 @@ end
 local function isPress(i) return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch end
 local function isMove(i) return i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch end
 
+------------------------------------------------------------------------
+-- Control animations: quick and smooth, no bounce (XP never bounced)
+------------------------------------------------------------------------
+local TICK_IN   = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TICK_OUT  = TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+local MENU_OPEN = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local GLIDE     = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local BLEND     = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- A check mark in a w x h box; segs are {x1, y1, x2, y2} in box pixels. Returns set(on, animate):
+-- ticking grows and fades the mark in from the middle, clearing shrinks and fades it out.
+local function checkMark(parent, w, h, segs, thick)
+	local mark = new("Frame", {
+		Parent = parent, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = px(w / 2, h / 2), Size = px(w, h), Visible = false,
+	})
+	local scale = new("UIScale", { Parent = mark })
+	local lines = {}
+	for i, sg in ipairs(segs) do lines[i] = segment(mark, sg[1], sg[2], sg[3], sg[4], thick, Theme.Check) end
+	local token = 0
+	return function(on, animate)
+		token += 1
+		local my = token
+		if not animate then
+			mark.Visible = on
+			scale.Scale = 1
+			for _, l in ipairs(lines) do l.BackgroundTransparency = 0 end
+			return
+		end
+		if on then
+			mark.Visible = true
+			scale.Scale = 0.3
+			for _, l in ipairs(lines) do
+				l.BackgroundTransparency = 1
+				TweenService:Create(l, TICK_IN, { BackgroundTransparency = 0 }):Play()
+			end
+			TweenService:Create(scale, TICK_IN, { Scale = 1 }):Play()
+		else
+			for _, l in ipairs(lines) do TweenService:Create(l, TICK_OUT, { BackgroundTransparency = 1 }):Play() end
+			TweenService:Create(scale, TICK_OUT, { Scale = 0.5 }):Play()
+			task.delay(TICK_OUT.Time, function()
+				if my == token then mark.Visible = false; scale.Scale = 1 end
+			end)
+		end
+	end
+end
+
 local function keyName(k)
 	if k == nil then return "None" end
 	if k.EnumType == Enum.UserInputType then
@@ -402,9 +449,9 @@ local function xpButton(parent, pos, size, text)
 	local label = new("TextLabel", { Parent = b, Name = "Label", Size = ud(1, 0, 1, 0), Text = text or "", TextColor3 = Theme.ButtonText, ZIndex = 3 })
 
 	connect(b.MouseEnter, function() ring.Visible = true end)
-	connect(b.MouseLeave, function() ring.Visible = false; g.Color = seq(G.Button) end)
-	connect(b.MouseButton1Down, function() g.Color = seq(G.ButtonDown) end)
-	connect(b.MouseButton1Up, function() g.Color = seq(G.Button) end)
+	connect(b.MouseLeave, function() ring.Visible = false; g.Color = seq(G.Button); label.Position = px(0, 0) end)
+	connect(b.MouseButton1Down, function() g.Color = seq(G.ButtonDown); label.Position = px(1, 1) end)
+	connect(b.MouseButton1Up, function() g.Color = seq(G.Button); label.Position = px(0, 0) end)
 	return b, label
 end
 
@@ -475,9 +522,7 @@ function Group:AddToggle(flag, o)
 	local cb = new("Frame", { Parent = row, Position = px(1, 3), Size = px(11, 11), BackgroundColor3 = Theme.White, stroke(Theme.CheckBorder) })
 	local cg = gradient(G.Check, 45); cg.Parent = cb
 	new("Frame", { Parent = cb, Position = px(2, 2), Size = px(7, 7), BackgroundColor3 = Theme.White, gradient(G.Check, 45) })
-	local mark = new("Frame", { Parent = cb, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), Visible = false })
-	segment(mark, 2, 5, 4.5, 8, 2, Theme.Check)
-	segment(mark, 4, 8, 9, 2.5, 2, Theme.Check)
+	local setMark = checkMark(cb, 11, 11, { { 2, 5, 4.5, 8 }, { 4, 8, 9, 2.5 } }, 2)
 	new("TextLabel", { Parent = row, Position = px(19, 0), Size = ud(1, -19, 1, 0), Text = o.Text or flag, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd })
 
 	connect(row.MouseEnter, function() cg.Color = seq(G.CheckHover) end)
@@ -487,7 +532,7 @@ function Group:AddToggle(flag, o)
 		v = v and true or false
 		T.Value = v
 		Library.Flags[flag] = v
-		mark.Visible = v
+		setMark(v, doFire)
 		if doFire then fire(T, o.Callback, v) end
 	end
 	function T:Set(v) apply(v, true) end
@@ -539,7 +584,8 @@ function Group:AddSlider(flag, o)
 		S.Value = v
 		Library.Flags[flag] = v
 		local rel = (max == min) and 0 or (v - min) / (max - min)
-		thumb.Position = ud(rel, 5 - 10 * rel, 0, 2)
+		local goal = ud(rel, 5 - 10 * rel, 0, 2)
+		if doFire then TweenService:Create(thumb, GLIDE, { Position = goal }):Play() else thumb.Position = goal end
 		valueLabel.Text = fmt(v) .. suffix
 		if doFire and changed then fire(S, o.Callback, v) end
 	end
@@ -644,11 +690,10 @@ function Group:AddDropdown(flag, o)
 		for i, v in ipairs(values) do
 			local it = new("TextButton", { Parent = listFrame, Size = ud(1, 0, 0, 16), LayoutOrder = i, BackgroundTransparency = 1, BackgroundColor3 = Theme.Select })
 			new("TextLabel", { Parent = it, Name = "Label", Position = px(multi and 18 or 4, 0), Size = ud(1, -22, 1, 0), Text = tostring(v), TextXAlignment = Enum.TextXAlignment.Left })
-			local mark
+			local setMark
 			if multi then
-				mark = new("Frame", { Parent = it, BackgroundTransparency = 1, Size = px(16, 16), Visible = D.Value[v] == true })
-				segment(mark, 4, 8, 6.5, 11, 2, Theme.Check)
-				segment(mark, 6, 11, 11, 5, 2, Theme.Check)
+				setMark = checkMark(it, 16, 16, { { 4, 8, 6.5, 11 }, { 6, 11, 11, 5 } }, 2)
+				setMark(D.Value[v] == true, false)
 			end
 			if not multi and D.Value == v then highlight(it) end
 			connect(it.MouseEnter, function() highlight(it) end)
@@ -656,7 +701,7 @@ function Group:AddDropdown(flag, o)
 				if multi then
 					local nv = table.clone(D.Value)
 					nv[v] = not nv[v] or nil
-					mark.Visible = nv[v] == true
+					setMark(nv[v] == true, true)
 					apply(nv, true)
 				else
 					apply(v, true)
@@ -679,8 +724,10 @@ function Group:AddDropdown(flag, o)
 		local rp = Library._root.AbsolutePosition
 		local ap, as = field.AbsolutePosition, field.AbsoluteSize
 		listFrame.Position = px(ap.X - rp.X, ap.Y - rp.Y + as.Y + 1)
-		listFrame.Size = px(as.X, math.max(1, math.min(#values, 8)) * 16)
+		-- slides open like an XP menu
+		listFrame.Size = px(as.X, 0)
 		listFrame.Visible = true
+		TweenService:Create(listFrame, MENU_OPEN, { Size = px(as.X, math.max(1, math.min(#values, 8)) * 16) }):Play()
 		open = true
 		Library:_openPopup(popup)
 	end)
@@ -1526,9 +1573,7 @@ function Library:CreateWindow(opt)
 
 			local check = new("Frame", { Parent = card, Position = px(12, 9), Size = px(18, 18), BackgroundColor3 = Theme.White, stroke(Theme.CheckBorder) })
 			local checkGrad = gradient(G.Check, 45); checkGrad.Parent = check
-			local mark = new("Frame", { Parent = check, BackgroundTransparency = 1, Size = ud(1, 0, 1, 0), Visible = false })
-			segment(mark, 3, 9, 7, 13.5, 2.5, Theme.Check)
-			segment(mark, 6.5, 13.5, 15, 4, 2.5, Theme.Check)
+			local setMark = checkMark(check, 18, 18, { { 3, 9, 7, 13.5 }, { 6.5, 13.5, 15, 4 } }, 2.5)
 
 			new("TextLabel", {
 				Parent = card, Position = px(40, 0), Size = ud(1, -120, 1, 0), Text = o.Text or flag,
@@ -1543,11 +1588,16 @@ function Library:CreateWindow(opt)
 				v = v and true or false
 				T.Value = v
 				Library.Flags[flag] = v
-				mark.Visible = v
+				setMark(v, doFire)
 				state.Text = v and "ON" or "OFF"
-				state.TextColor3 = v and Theme.Check or Theme.TextDim
-				edge.Color = v and Theme.Check or Theme.GroupBorder
-				edge.Thickness = v and 2 or 1
+				local stateColor = v and Theme.Check or Theme.TextDim
+				local edgeColor, edgeThick = v and Theme.Check or Theme.GroupBorder, v and 2 or 1
+				if doFire then
+					TweenService:Create(state, BLEND, { TextColor3 = stateColor }):Play()
+					TweenService:Create(edge, BLEND, { Color = edgeColor, Thickness = edgeThick }):Play()
+				else
+					state.TextColor3, edge.Color, edge.Thickness = stateColor, edgeColor, edgeThick
+				end
 				if doFire then fire(T, o.Callback, v) end
 			end
 			function T:Set(v) apply(v, true) end
@@ -1621,7 +1671,7 @@ local Flags = Library.Flags
 local Options = Library.Options
 
 local NAME = "xpware"
-local VERSION = "0.9.1"
+local VERSION = "0.9.2"
 local function stub() end
 local function notify(text, title, dur) Library:Notify(title or NAME, text, dur or 3) end
 
